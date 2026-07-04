@@ -1,0 +1,160 @@
+name: mcp-go Prerelease Testing
+
+on:
+  schedule:
+    - cron: '0 3 * * *'
+  workflow_dispatch:
+
+jobs:
+  discover-versions:
+    name: Discover mcp-go prerelease versions
+    runs-on: ubuntu-latest
+    outputs:
+      versions: ${{ steps.get-versions.outputs.versions }}
+      version-count: ${{ steps.get-versions.outputs.version-count }}
+      latest-stable: ${{ steps.get-versions.outputs.latest-stable }}
+    steps:
+      - name: Get mcp-go prerelease versions
+        id: get-versions
+        run: |
+          echo "Fetching tags from mark3labs/mcp-go..."
+          TAGS=$(git ls-remote --tags https://github.com/mark3labs/mcp-go.git | \
+                 grep -v '\^{}' | \
+                 awk '{print $2}' | \
+                 sed 's#refs/tags/##')
+
+          echo "Found $(echo "$TAGS" | wc -l) total tags"
+
+          STABLE_TAGS=$(echo "$TAGS" | grep -E '^v[0-9]+\.[0-9]+\.[0-9]+$' || true)
+          PRERELEASE_TAGS=$(echo "$TAGS" | grep -E '^v[0-9]+\.[0-9]+\.[0-9]+-(alpha|beta|rc|pre)' || true)
+
+          LATEST_STABLE=$(echo "$STABLE_TAGS" | sort -V | tail -1 | sed 's/^v//')
+          echo "Latest stable version: v$LATEST_STABLE"
+
+          VERSIONS=$(echo "$PRERELEASE_TAGS" | \
+            awk -v latest_stable="$LATEST_STABLE" '
+            BEGIN {
+              split(latest_stable, stable, ".")
+              stable_major = stable[1]
+              stable_minor = stable[2]
+              stable_patch = stable[3]
+            }
+            {
+              sub(/^v/, "")
+              full_tag = $0
+              if (match($0, /^([0-9]+)\.([0-9]+)\.([0-9]+)-(.+)$/, parts)) {
+                major = parts[1]
+                minor = parts[2]
+                patch = parts[3]
+                prerelease = parts[4]
+                is_newer = 0
+                if (major > stable_major) {
+                  is_newer = 1
+                } else if (major == stable_major && minor > stable_minor) {
+                  is_newer = 1
+                } else if (major == stable_major && minor == stable_minor && patch > stable_patch) {
+                  is_newer = 1
+                }
+                if (is_newer) {
+                  minor_key = major "." minor
+                  if (!(minor_key in latest) || patch "." prerelease > latest_patch[minor_key]) {
+                    latest_patch[minor_key] = patch "." prerelease
+                    latest[minor_key] = full_tag
+                  }
+                }
+              }
+            }
+            END {
+              n = asorti(latest, sorted)
+              if (n == 0) {
+                printf "[]"
+              } else {
+                printf "["
+                for (i = 1; i <= n; i++) {
+                  if (i > 1) printf ","
+                  printf "\"" latest[sorted[i]] "\""
+                }
+                printf "]"
+              }
+            }')
+
+          echo "Filtered prerelease versions (newer than v$LATEST_STABLE):"
+          if [ "$VERSIONS" != "[]" ]; then
+            echo "$VERSIONS" | jq -r '.[]' | sort -V
+          else
+            echo "(none found)"
+          fi
+
+          VERSION_COUNT=$(echo "$VERSIONS" | jq '. | length')
+          echo "Total prerelease versions to test: $VERSION_COUNT"
+
+          echo "versions=$VERSIONS" >> $GITHUB_OUTPUT
+          echo "version-count=$VERSION_COUNT" >> $GITHUB_OUTPUT
+          echo "latest-stable=$LATEST_STABLE" >> $GITHUB_OUTPUT
+
+  test:
+    name: Test with mcp-go v${{ matrix.version }} (prerelease)
+    needs: discover-versions
+    if: needs.discover-versions.outputs.version-count != '0'
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        version: ${{ fromJson(needs.discover-versions.outputs.versions) }}
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: '1.23'
+          cache: true
+
+      - name: Update mcp-go to v${{ matrix.version }}
+        working-directory: ./mcpgo
+        run: |
+          echo "Updating mcp-go to prerelease v${{ matrix.version }}..."
+          go get github.com/mark3labs/mcp-go@v${{ matrix.version }}
+          go mod tidy
+
+          echo "Current mcp-go version:"
+          go list -m github.com/mark3labs/mcp-go
+
+      - name: Run tests
+        working-directory: ./mcpgo
+        run: |
+          echo "Running mcpgo test suite with mcp-go v${{ matrix.version }} (prerelease)..."
+          go test -v -race ./...
+
+      - name: Test result
+        if: success()
+        run: echo "All tests passed with mcp-go v${{ matrix.version }} (prerelease)"
+
+  summary:
+    name: Prerelease Test Summary
+    needs: [discover-versions, test]
+    runs-on: ubuntu-latest
+    if: always()
+    steps:
+      - name: Check test results
+        run: |
+          LATEST_STABLE="${{ needs.discover-versions.outputs.latest-stable }}"
+          VERSION_COUNT="${{ needs.discover-versions.outputs.version-count }}"
+
+          echo "Latest stable mcp-go version: v$LATEST_STABLE"
+          echo "Tested against $VERSION_COUNT prerelease version(s)"
+          echo ""
+
+          if [ "$VERSION_COUNT" == "0" ]; then
+            echo "No prerelease versions found newer than v$LATEST_STABLE"
+            exit 0
+          fi
+
+          if [ "${{ needs.test.result }}" == "success" ]; then
+            echo "All prerelease compatibility tests passed!"
+          else
+            echo "Some prerelease compatibility tests failed"
+            exit 1
+          fi

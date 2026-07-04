@@ -1,0 +1,120 @@
+name: go-sdk Compatibility Testing
+
+on:
+  pull_request:
+  push:
+    branches:
+      - main
+  schedule:
+    - cron: '0 2 * * *'
+  workflow_dispatch:
+
+jobs:
+  discover-versions:
+    name: Discover go-sdk versions
+    runs-on: ubuntu-latest
+    outputs:
+      versions: ${{ steps.get-versions.outputs.versions }}
+      version-count: ${{ steps.get-versions.outputs.version-count }}
+    steps:
+      - name: Get go-sdk versions
+        id: get-versions
+        run: |
+          echo "Fetching tags from modelcontextprotocol/go-sdk..."
+          TAGS=$(git ls-remote --tags https://github.com/modelcontextprotocol/go-sdk.git | \
+                 grep -v '\^{}' | \
+                 awk '{print $2}' | \
+                 sed 's#refs/tags/##' | \
+                 grep -E '^v[0-9]+\.[0-9]+\.[0-9]+$')
+
+          echo "Found $(echo "$TAGS" | wc -l) total tags"
+
+          VERSIONS=$(echo "$TAGS" | \
+            awk -F'[.v]' '
+            {
+              major = $2
+              minor = $3
+              patch = $4
+              if ((major == 1 && minor >= 1) || major > 1) {
+                minor_key = major "." minor
+                full_version = major "." minor "." patch
+                if (!(minor_key in latest_patch) || patch > latest_patch[minor_key]) {
+                  latest_patch[minor_key] = patch
+                  latest[minor_key] = full_version
+                }
+              }
+            }
+            END {
+              n = asorti(latest, sorted)
+              printf "["
+              for (i = 1; i <= n; i++) {
+                if (i > 1) printf ","
+                printf "\"" latest[sorted[i]] "\""
+              }
+              printf "]"
+            }')
+
+          echo "Filtered versions (>= v1.1.0, latest patch per minor):"
+          echo "$VERSIONS" | jq -r '.[]' | sort -V
+
+          VERSION_COUNT=$(echo "$VERSIONS" | jq '. | length')
+          echo "Total versions to test: $VERSION_COUNT"
+
+          echo "versions=$VERSIONS" >> $GITHUB_OUTPUT
+          echo "version-count=$VERSION_COUNT" >> $GITHUB_OUTPUT
+
+  test:
+    name: Test with go-sdk v${{ matrix.version }}
+    needs: discover-versions
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        version: ${{ fromJson(needs.discover-versions.outputs.versions) }}
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: '1.24'
+          cache: true
+
+      - name: Update go-sdk to v${{ matrix.version }}
+        working-directory: ./officialsdk
+        run: |
+          echo "Updating go-sdk to v${{ matrix.version }}..."
+          go get github.com/modelcontextprotocol/go-sdk@v${{ matrix.version }}
+          go mod tidy
+
+          echo "Current go-sdk version:"
+          go list -m github.com/modelcontextprotocol/go-sdk
+
+      - name: Run tests
+        working-directory: ./officialsdk
+        run: |
+          echo "Running officialsdk test suite with go-sdk v${{ matrix.version }}..."
+          go test -v -race ./...
+
+      - name: Test result
+        if: success()
+        run: echo "All tests passed with go-sdk v${{ matrix.version }}"
+
+  summary:
+    name: Compatibility Test Summary
+    needs: [discover-versions, test]
+    runs-on: ubuntu-latest
+    if: always()
+    steps:
+      - name: Check test results
+        run: |
+          echo "Tested against ${{ needs.discover-versions.outputs.version-count }} go-sdk versions"
+          echo ""
+          if [ "${{ needs.test.result }}" == "success" ]; then
+            echo "All compatibility tests passed!"
+          else
+            echo "Some compatibility tests failed"
+            exit 1
+          fi

@@ -1,0 +1,83 @@
+# Binaries for programs and plugins
+*.exe
+*.exe~
+*.dll
+*.so
+*.dylib
+
+# Test binary, built with `go test -c`
+*.test
+
+# Output of the go coverage tool
+*.out
+coverage.html
+coverage.xml
+
+# Build output directories
+/bin/
+/build/
+/dist/
+/out/
+
+# Compiled binaries (adjust if your binary has a specific name)
+agentcat-go-sdk
+mcpcat
+
+# Example compiled binaries
+examples/mcpgo/basic/basic
+examples/mcpgo/basic/mcpgo-basic
+examples/mcpgo/advanced/advanced
+examples/mcpgo/advanced/mcpgo-advanced
+examples/officialsdk/basic/basic
+examples/officialsdk/basic/officialsdk-basic
+examples/officialsdk/advanced/advanced
+examples/officialsdk/advanced/officialsdk-advanced
+
+# Dependency directories
+# vendor/
+
+# Go workspace file
+go.work
+go.work.sum
+
+# MCP configuration
+.mcp.json
+
+# Environment and configuration files
+.env
+.env.*
+!.env.example
+*.local
+
+# MCPCat log files
+mcpcat.log
+*.log
+
+# IDE and editor files
+.idea/
+*.iml
+.vscode/
+*.swp
+*.swo
+*~
+.project
+.classpath
+.settings/
+*.sublime-project
+*.sublime-workspace
+
+# OS files
+.DS_Store
+.DS_Store?
+._*
+.Spotlight-V100
+.Trashes
+ehthumbs.db
+Thumbs.db
+Desktop.ini
+
+# Temporary files
+*.tmp
+*.temp
+tmp/
+temp/

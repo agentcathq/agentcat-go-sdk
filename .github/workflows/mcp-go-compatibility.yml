@@ -1,0 +1,120 @@
+name: mcp-go Compatibility Testing
+
+on:
+  pull_request:
+  push:
+    branches:
+      - main
+  schedule:
+    - cron: '0 2 * * *'
+  workflow_dispatch:
+
+jobs:
+  discover-versions:
+    name: Discover mcp-go versions
+    runs-on: ubuntu-latest
+    outputs:
+      versions: ${{ steps.get-versions.outputs.versions }}
+      version-count: ${{ steps.get-versions.outputs.version-count }}
+    steps:
+      - name: Get mcp-go versions
+        id: get-versions
+        run: |
+          echo "Fetching tags from mark3labs/mcp-go..."
+          TAGS=$(git ls-remote --tags https://github.com/mark3labs/mcp-go.git | \
+                 grep -v '\^{}' | \
+                 awk '{print $2}' | \
+                 sed 's#refs/tags/##' | \
+                 grep -E '^v[0-9]+\.[0-9]+\.[0-9]+$')
+
+          echo "Found $(echo "$TAGS" | wc -l) total tags"
+
+          VERSIONS=$(echo "$TAGS" | \
+            awk -F'[.v]' '
+            {
+              major = $2
+              minor = $3
+              patch = $4
+              if (major == 0 && minor >= 40) {
+                minor_key = major "." minor
+                full_version = major "." minor "." patch
+                if (!(minor_key in latest_patch) || patch > latest_patch[minor_key]) {
+                  latest_patch[minor_key] = patch
+                  latest[minor_key] = full_version
+                }
+              }
+            }
+            END {
+              n = asorti(latest, sorted)
+              printf "["
+              for (i = 1; i <= n; i++) {
+                if (i > 1) printf ","
+                printf "\"" latest[sorted[i]] "\""
+              }
+              printf "]"
+            }')
+
+          echo "Filtered versions (>= v0.40.0, latest patch per minor):"
+          echo "$VERSIONS" | jq -r '.[]' | sort -V
+
+          VERSION_COUNT=$(echo "$VERSIONS" | jq '. | length')
+          echo "Total versions to test: $VERSION_COUNT"
+
+          echo "versions=$VERSIONS" >> $GITHUB_OUTPUT
+          echo "version-count=$VERSION_COUNT" >> $GITHUB_OUTPUT
+
+  test:
+    name: Test with mcp-go v${{ matrix.version }}
+    needs: discover-versions
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        version: ${{ fromJson(needs.discover-versions.outputs.versions) }}
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: '1.23'
+          cache: true
+
+      - name: Update mcp-go to v${{ matrix.version }}
+        working-directory: ./mcpgo
+        run: |
+          echo "Updating mcp-go to v${{ matrix.version }}..."
+          go get github.com/mark3labs/mcp-go@v${{ matrix.version }}
+          go mod tidy
+
+          echo "Current mcp-go version:"
+          go list -m github.com/mark3labs/mcp-go
+
+      - name: Run tests
+        working-directory: ./mcpgo
+        run: |
+          echo "Running mcpgo test suite with mcp-go v${{ matrix.version }}..."
+          go test -v -race ./...
+
+      - name: Test result
+        if: success()
+        run: echo "All tests passed with mcp-go v${{ matrix.version }}"
+
+  summary:
+    name: Compatibility Test Summary
+    needs: [discover-versions, test]
+    runs-on: ubuntu-latest
+    if: always()
+    steps:
+      - name: Check test results
+        run: |
+          echo "Tested against ${{ needs.discover-versions.outputs.version-count }} mcp-go versions"
+          echo ""
+          if [ "${{ needs.test.result }}" == "success" ]; then
+            echo "All compatibility tests passed!"
+          else
+            echo "Some compatibility tests failed"
+            exit 1
+          fi
