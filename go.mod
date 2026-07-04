@@ -6,7 +6,7 @@ toolchain go1.24.4
 
 require (
 	github.com/segmentio/ksuid v1.0.4
-	go.agentcat.com/api v0.0.0-20260704194121-ad7827fb5ba1
+	go.agentcat.com/api v1.0.0-beta.1
 )
 
 require (

@@ -21,8 +21,8 @@ github.com/segmentio/ksuid v1.0.4 h1:sBo2BdShXjmcugAMwjugoGUdUV0pcxY5mW4xKRn3v4c
 github.com/segmentio/ksuid v1.0.4/go.mod h1:/XUiZBD3kVx5SmUOl55voK5yeAbBNNIed+2O73XgrPE=
 github.com/yosida95/uritemplate/v3 v3.0.2 h1:Ed3Oyj9yrmi9087+NczuL5BwkIc4wvTb5zIM+UJPGz4=
 github.com/yosida95/uritemplate/v3 v3.0.2/go.mod h1:ILOh0sOhIJR3+L/8afwt/kE++YT040gmv5BQTMR2HP4=
-go.agentcat.com/api v0.0.0-20260704194121-ad7827fb5ba1 h1:zT2Op5vCFOLl5TuxgmSbYcypAtrVy9ZK1cT/QVP9ak8=
-go.agentcat.com/api v0.0.0-20260704194121-ad7827fb5ba1/go.mod h1:+3zIbjg78KRXSYVckJz8vVzApakrH17fSbN9ts8Adh8=
+go.agentcat.com/api v1.0.0-beta.1 h1:lWIvQEfs8qscU+r+97nSFdbodoiorTfyGOqE/Kaa78Y=
+go.agentcat.com/api v1.0.0-beta.1/go.mod h1:+3zIbjg78KRXSYVckJz8vVzApakrH17fSbN9ts8Adh8=
 golang.org/x/oauth2 v0.34.0 h1:hqK/t4AKgbqWkdkcAeI8XLmbK+4m4G5YeQRrmiotGlw=
 golang.org/x/oauth2 v0.34.0/go.mod h1:lzm5WQJQwKZ3nwavOZ3IS5Aulzxi68dUSgRHujetwEA=
 golang.org/x/sys v0.40.0 h1:DBZZqJ2Rkml6QMQsZywtnjnnGvHza6BTfYFWY9kjEWQ=
