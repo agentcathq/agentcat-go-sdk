@@ -6,7 +6,7 @@ toolchain go1.24.4
 
 require (
 	github.com/mark3labs/mcp-go v0.44.1
-	go.agentcat.com/sdk v1.0.0-beta.1
+	go.agentcat.com/sdk v1.0.0
 )
 
 require (
@@ -20,7 +20,7 @@ require (
 	github.com/spf13/cast v1.7.1 // indirect
 	github.com/wk8/go-ordered-map/v2 v2.1.8 // indirect
 	github.com/yosida95/uritemplate/v3 v3.0.2 // indirect
-	go.agentcat.com/api v1.0.0-beta.1 // indirect
+	go.agentcat.com/api v1.0.0 // indirect
 	gopkg.in/validator.v2 v2.0.1 // indirect
 	gopkg.in/yaml.v3 v3.0.1 // indirect
 )

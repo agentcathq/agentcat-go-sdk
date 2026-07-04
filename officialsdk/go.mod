@@ -4,7 +4,7 @@ go 1.25.0
 
 require (
 	github.com/modelcontextprotocol/go-sdk v1.4.1
-	go.agentcat.com/sdk v1.0.0-beta.1
+	go.agentcat.com/sdk v1.0.0
 )
 
 require (
@@ -15,7 +15,7 @@ require (
 	github.com/segmentio/encoding v0.5.4 // indirect
 	github.com/segmentio/ksuid v1.0.4 // indirect
 	github.com/yosida95/uritemplate/v3 v3.0.2 // indirect
-	go.agentcat.com/api v1.0.0-beta.1 // indirect
+	go.agentcat.com/api v1.0.0 // indirect
 	golang.org/x/oauth2 v0.34.0 // indirect
 	golang.org/x/sys v0.40.0 // indirect
 	gopkg.in/validator.v2 v2.0.1 // indirect
