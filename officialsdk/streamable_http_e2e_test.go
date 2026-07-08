@@ -166,9 +166,9 @@ func TestHTTP_IdentifyInvoked(t *testing.T) {
 		t.Error("expected Identify function to be called")
 	}
 
-	identifyEvents := filterEvents(events, "mcpcat:identify")
+	identifyEvents := filterEvents(events, "agentcat:identify")
 	if len(identifyEvents) == 0 {
-		t.Fatal("expected an mcpcat:identify event to be published")
+		t.Fatal("expected an agentcat:identify event to be published")
 	}
 
 	evt := identifyEvents[0]
@@ -181,7 +181,10 @@ func TestHTTP_IdentifyInvoked(t *testing.T) {
 	}
 }
 
-func TestHTTP_IdentifyDedup(t *testing.T) {
+// TestHTTP_IdentifyRerunAndEventDedup verifies the identify callback re-runs
+// on every tool call (matching the TypeScript SDK) while the agentcat:identify
+// event is published only when the identity changes.
+func TestHTTP_IdentifyRerunAndEventDedup(t *testing.T) {
 	var mu sync.Mutex
 	identifyCount := 0
 	opts := DefaultOptions()
@@ -220,14 +223,28 @@ func TestHTTP_IdentifyDedup(t *testing.T) {
 	}
 
 	// Wait for second tool call events
-	mock.waitForEvents(5, 3*time.Second)
+	events := mock.waitForEvents(5, 3*time.Second)
 
 	mu.Lock()
 	count := identifyCount
 	mu.Unlock()
 
-	if count != 1 {
-		t.Errorf("expected Identify to be called exactly once, got %d", count)
+	// The callback re-runs on every tool call so identity changes can be
+	// detected.
+	if count != 2 {
+		t.Errorf("expected Identify to be called on each tool call (2), got %d", count)
+	}
+
+	// The identify event is deduplicated: the identity never changed, so
+	// exactly one agentcat:identify event is published.
+	identifyEvents := 0
+	for _, evt := range events {
+		if evt.EventType != nil && *evt.EventType == "agentcat:identify" {
+			identifyEvents++
+		}
+	}
+	if identifyEvents != 1 {
+		t.Errorf("expected exactly 1 identify event (identity unchanged), got %d", identifyEvents)
 	}
 }
 

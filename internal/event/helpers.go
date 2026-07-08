@@ -11,7 +11,7 @@ import (
 	"go.agentcat.com/sdk/internal/exceptions"
 )
 
-// NewEventID generates a new unique event ID with the MCPCat prefix.
+// NewEventID generates a new unique event ID with the AgentCat prefix.
 func NewEventID() string {
 	return fmt.Sprintf("%s_%s", core.PrefixEvent, ksuid.New().String())
 }
@@ -98,7 +98,7 @@ func CopySessionToEvent(session *core.Session, event *Event) {
 	event.IdentifyData = session.IdentifyData
 }
 
-// CreateIdentifyEvent creates an Event for mcpcat:identify event type.
+// CreateIdentifyEvent creates an Event for agentcat:identify event type.
 func CreateIdentifyEvent(session *core.Session) *Event {
 	if session == nil {
 		return nil
@@ -116,7 +116,7 @@ func CreateIdentifyEvent(session *core.Session) *Event {
 		projectID = *session.ProjectID
 	}
 
-	eventType := "mcpcat:identify"
+	eventType := "agentcat:identify"
 	event := &Event{
 		PublishEventRequest: agentcatapi.PublishEventRequest{
 			Id:        &eventID,

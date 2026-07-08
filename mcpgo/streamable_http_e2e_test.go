@@ -141,9 +141,10 @@ func TestStreamableHTTP_IdentifyInvoked(t *testing.T) {
 	}
 }
 
-// TestStreamableHTTP_IdentifyDedup verifies that Identify is called on the
-// first request but not on subsequent requests within the same session.
-func TestStreamableHTTP_IdentifyDedup(t *testing.T) {
+// TestStreamableHTTP_IdentifyRerun verifies that Identify is re-run on every
+// tool call (matching the TypeScript SDK): the callback fires each time, and
+// identify events are deduplicated by change detection instead.
+func TestStreamableHTTP_IdentifyRerun(t *testing.T) {
 	var identifyCount atomic.Int32
 
 	opts := &Options{
@@ -180,7 +181,8 @@ func TestStreamableHTTP_IdentifyDedup(t *testing.T) {
 		t.Fatal("expected Identify to be called after first tool call, but it was not")
 	}
 
-	// Second call: Identify should NOT fire again (session already identified)
+	// Second call: Identify runs again on every tool call so identity
+	// changes can be detected (the identify event is only published on change).
 	req2 := mcp.CallToolRequest{}
 	req2.Params.Name = "list_todos"
 	req2.Params.Arguments = map[string]any{}
@@ -191,8 +193,8 @@ func TestStreamableHTTP_IdentifyDedup(t *testing.T) {
 	}
 
 	countAfterSecond := identifyCount.Load()
-	if countAfterSecond != countAfterFirst {
-		t.Errorf("expected Identify count to stay at %d after second call, but got %d (dedup failed)",
+	if countAfterSecond <= countAfterFirst {
+		t.Errorf("expected Identify to be re-run on the second call (count > %d), got %d",
 			countAfterFirst, countAfterSecond)
 	}
 }

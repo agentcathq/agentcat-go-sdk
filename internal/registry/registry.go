@@ -10,14 +10,14 @@ import (
 )
 
 var (
-	serverMCPcatMap = make(map[any]*core.MCPcatInstance)
+	serverMCPcatMap = make(map[any]*core.AgentCatInstance)
 	registryMu      sync.RWMutex
 	logger          = logging.New()
 )
 
-// Register stores the MCPcat instance for a given server.
+// Register stores the AgentCat instance for a given server.
 // The server must be a pointer type (as all MCP server types are).
-func Register(server any, instance *core.MCPcatInstance) {
+func Register(server any, instance *core.AgentCatInstance) {
 	mustBePointer(server)
 
 	logger.Debugf("Registry: Registering server %T", server)
@@ -28,8 +28,8 @@ func Register(server any, instance *core.MCPcatInstance) {
 	logger.Debugf("Registry: Map now contains %d entries", len(serverMCPcatMap))
 }
 
-// Get retrieves the MCPcat instance for a given server.
-func Get(server any) *core.MCPcatInstance {
+// Get retrieves the AgentCat instance for a given server.
+func Get(server any) *core.AgentCatInstance {
 	if server == nil {
 		return nil
 	}

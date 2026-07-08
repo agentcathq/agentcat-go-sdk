@@ -12,7 +12,7 @@ import (
 	agentcat "go.agentcat.com/sdk"
 )
 
-// addTracingToHooks registers MCPCat tracking hooks on the given Hooks struct.
+// addTracingToHooks registers AgentCat tracking hooks on the given Hooks struct.
 // It captures request timing, session metadata, event creation, and publishing.
 // The caller must call Stop() on the returned SessionMap during shutdown.
 func addTracingToHooks(hooks *server.Hooks, opts *Options, publishFn func(*agentcat.Event)) *agentcat.SessionMap {
@@ -32,29 +32,52 @@ func addTracingToHooks(hooks *server.Hooks, opts *Options, publishFn func(*agent
 		return captureSessionFromContext(ctx, request, response, sessionMap, opts, publishFn)
 	}
 
-	// BeforeAny: store request start time
-	hooks.AddBeforeAny(func(ctx context.Context, id any, method mcp.MCPMethod, message any) {
-		requestTimes.Store(id, time.Now())
-	})
+	// recoverHook guards every hook body: hooks run synchronously inside
+	// mcp-go's request handling, which has no panic recovery of its own, so a
+	// panic here would crash the customer's server. Recover, log, and drop
+	// the event instead.
+	recoverHook := func(hook string) {
+		if r := recover(); r != nil {
+			agentcat.LogRecoveredPanic("mcpgo "+hook+" hook", r)
+		}
+	}
 
 	// AfterListTools: inject context params if enabled
 	hooks.AddAfterListTools(func(ctx context.Context, id any, message *mcp.ListToolsRequest, result *mcp.ListToolsResult) {
+		defer recoverHook("AfterListTools")
+
 		shouldAddContext := false
+		contextDescription := ""
 
 		mcpServer := server.ServerFromContext(ctx)
 		if mcpServer != nil {
 			if tracker := agentcat.GetInstance(mcpServer); tracker != nil && tracker.Options != nil {
 				shouldAddContext = !tracker.Options.DisableToolCallContext
+				contextDescription = tracker.Options.CustomContextDescription
 			}
 		}
 
 		if shouldAddContext {
-			addContextParamsToToolsList(result)
+			addContextParamsToToolsList(result, contextDescription)
 		}
+	})
+
+	// When tracing is disabled, no events are captured or published; context
+	// injection above still honors its own flag.
+	if opts.DisableTracing {
+		return sessionMap
+	}
+
+	// BeforeAny: store request start time
+	hooks.AddBeforeAny(func(ctx context.Context, id any, method mcp.MCPMethod, message any) {
+		defer recoverHook("BeforeAny")
+		requestTimes.Store(id, time.Now())
 	})
 
 	// OnSuccess: capture session, create and publish event
 	hooks.AddOnSuccess(func(ctx context.Context, id any, method mcp.MCPMethod, message any, result any) {
+		defer recoverHook("OnSuccess")
+
 		duration := getDuration(id)
 
 		ps := captureSession(ctx, message, result)
@@ -81,10 +104,13 @@ func addTracingToHooks(hooks *server.Hooks, opts *Options, publishFn func(*agent
 		// Map MCP method to event type
 		eventType := fmt.Sprintf("mcp:%s", string(method))
 
-		// Create event under lock (NewEvent reads session fields)
-		ps.Mu.Lock()
-		evt := agentcat.NewEvent(ps.Sess, eventType, duration, isError, errorDetails)
-		ps.Mu.Unlock()
+		// Create event under lock (NewEvent reads session fields). The lock is
+		// released via defer so a panic can never leave the session mutex held.
+		evt := func() *agentcat.Event {
+			ps.Mu.Lock()
+			defer ps.Mu.Unlock()
+			return agentcat.NewEvent(ps.Sess, eventType, duration, isError, errorDetails)
+		}()
 
 		if evt == nil {
 			return
@@ -128,21 +154,28 @@ func addTracingToHooks(hooks *server.Hooks, opts *Options, publishFn func(*agent
 			}
 		}
 
+		// Attach customer-defined tags and properties.
+		attachEventMetadata(ctx, opts, message, evt)
+
 		// Ensure identity fields are on the event if Identify just ran.
 		// NewEvent may have been called before Identify populated the session.
-		ps.Mu.Lock()
-		if ps.Sess.IdentifyActorGivenId != nil && evt.IdentifyActorGivenId == nil {
-			evt.IdentifyActorGivenId = ps.Sess.IdentifyActorGivenId
-			evt.IdentifyActorName = ps.Sess.IdentifyActorName
-			evt.IdentifyData = ps.Sess.IdentifyData
-		}
-		ps.Mu.Unlock()
+		func() {
+			ps.Mu.Lock()
+			defer ps.Mu.Unlock()
+			if ps.Sess.IdentifyActorGivenId != nil && evt.IdentifyActorGivenId == nil {
+				evt.IdentifyActorGivenId = ps.Sess.IdentifyActorGivenId
+				evt.IdentifyActorName = ps.Sess.IdentifyActorName
+				evt.IdentifyData = ps.Sess.IdentifyData
+			}
+		}()
 
 		publishFn(evt)
 	})
 
 	// OnError: capture session, create and publish error event
 	hooks.AddOnError(func(ctx context.Context, id any, method mcp.MCPMethod, message any, err error) {
+		defer recoverHook("OnError")
+
 		duration := getDuration(id)
 
 		ps := captureSession(ctx, message, nil)
@@ -152,10 +185,13 @@ func addTracingToHooks(hooks *server.Hooks, opts *Options, publishFn func(*agent
 
 		eventType := fmt.Sprintf("mcp:%s", string(method))
 
-		// Create event under lock (NewEvent reads session fields)
-		ps.Mu.Lock()
-		evt := agentcat.NewEvent(ps.Sess, eventType, duration, true, err)
-		ps.Mu.Unlock()
+		// Create event under lock (NewEvent reads session fields). The lock is
+		// released via defer so a panic can never leave the session mutex held.
+		evt := func() *agentcat.Event {
+			ps.Mu.Lock()
+			defer ps.Mu.Unlock()
+			return agentcat.NewEvent(ps.Sess, eventType, duration, true, err)
+		}()
 
 		if evt == nil {
 			return
@@ -194,14 +230,19 @@ func addTracingToHooks(hooks *server.Hooks, opts *Options, publishFn func(*agent
 			}
 		}
 
+		// Attach customer-defined tags and properties.
+		attachEventMetadata(ctx, opts, message, evt)
+
 		// Ensure identity fields are on the event if Identify just ran.
-		ps.Mu.Lock()
-		if ps.Sess.IdentifyActorGivenId != nil && evt.IdentifyActorGivenId == nil {
-			evt.IdentifyActorGivenId = ps.Sess.IdentifyActorGivenId
-			evt.IdentifyActorName = ps.Sess.IdentifyActorName
-			evt.IdentifyData = ps.Sess.IdentifyData
-		}
-		ps.Mu.Unlock()
+		func() {
+			ps.Mu.Lock()
+			defer ps.Mu.Unlock()
+			if ps.Sess.IdentifyActorGivenId != nil && evt.IdentifyActorGivenId == nil {
+				evt.IdentifyActorGivenId = ps.Sess.IdentifyActorGivenId
+				evt.IdentifyActorName = ps.Sess.IdentifyActorName
+				evt.IdentifyData = ps.Sess.IdentifyData
+			}
+		}()
 
 		publishFn(evt)
 	})

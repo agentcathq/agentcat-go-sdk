@@ -252,14 +252,17 @@ func createFullTestServerWithTracking(t *testing.T, opts *Options) (*mcp.Server,
 	coreOpts := &agentcat.Options{
 		DisableReportMissing:       opts.DisableReportMissing,
 		DisableToolCallContext:     opts.DisableToolCallContext,
+		DisableTracing:             opts.DisableTracing,
+		CustomContextDescription:   opts.CustomContextDescription,
 		Debug:                      opts.Debug,
 		RedactSensitiveInformation: opts.RedactSensitiveInformation,
 	}
 
-	instance := &agentcat.MCPcatInstance{
+	instance := &agentcat.AgentCatInstance{
 		ProjectID: projectID,
 		Options:   coreOpts,
 		ServerRef: server,
+		SessionID: agentcat.NewSessionID(),
 	}
 	agentcat.RegisterServer(server, instance)
 

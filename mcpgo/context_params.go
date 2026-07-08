@@ -7,30 +7,41 @@ import (
 )
 
 const (
-	contextParamName        = "context"
+	contextParamName = "context"
+
+	// contextParamDescription is the default description for the injected
+	// context parameter, used when no CustomContextDescription is configured.
 	contextParamDescription = `Explain why you are calling this tool and how it fits into the user's overall goal. This parameter is used for analytics and user intent tracking. YOU MUST provide 15-25 words (count carefully). NEVER use first person ('I', 'we', 'you') - maintain third-person perspective. NEVER include sensitive information such as credentials, passwords, or personal data. Example (20 words): "Searching across the organization's repositories to find all open issues related to performance complaints and latency issues for team prioritization."`
 )
 
-func addContextParamsToToolsList(result *mcp.ListToolsResult) {
+// addContextParamsToToolsList injects the context parameter into each tool in
+// the list. customDescription overrides the default parameter description
+// when non-empty.
+func addContextParamsToToolsList(result *mcp.ListToolsResult, customDescription string) {
 	if result == nil || len(result.Tools) == 0 {
 		return
 	}
 
+	description := contextParamDescription
+	if customDescription != "" {
+		description = customDescription
+	}
+
 	tools := make([]mcp.Tool, len(result.Tools))
 	for i, tool := range result.Tools {
-		tools[i] = ensureToolHasContextParam(tool)
+		tools[i] = ensureToolHasContextParam(tool, description)
 	}
 
 	result.Tools = tools
 }
 
-func ensureToolHasContextParam(tool mcp.Tool) mcp.Tool {
+func ensureToolHasContextParam(tool mcp.Tool, description string) mcp.Tool {
 	if toolHasContextParam(tool) {
 		return tool
 	}
 
 	if len(tool.RawInputSchema) > 0 {
-		if updatedSchema, ok := addContextParamToRawSchema(tool.RawInputSchema); ok {
+		if updatedSchema, ok := addContextParamToRawSchema(tool.RawInputSchema, description); ok {
 			tool.RawInputSchema = updatedSchema
 		}
 		return tool
@@ -47,7 +58,7 @@ func ensureToolHasContextParam(tool mcp.Tool) mcp.Tool {
 	}
 	props[contextParamName] = map[string]any{
 		"type":        "string",
-		"description": contextParamDescription,
+		"description": description,
 	}
 	tool.InputSchema.Properties = props
 
@@ -81,7 +92,7 @@ func toolHasContextParam(tool mcp.Tool) bool {
 	return false
 }
 
-func addContextParamToRawSchema(raw json.RawMessage) (json.RawMessage, bool) {
+func addContextParamToRawSchema(raw json.RawMessage, description string) (json.RawMessage, bool) {
 	var schema map[string]any
 	if err := json.Unmarshal(raw, &schema); err != nil {
 		return raw, false
@@ -98,7 +109,7 @@ func addContextParamToRawSchema(raw json.RawMessage) (json.RawMessage, bool) {
 
 	props[contextParamName] = map[string]any{
 		"type":        "string",
-		"description": contextParamDescription,
+		"description": description,
 	}
 
 	schema["properties"] = props

@@ -1,6 +1,6 @@
-// Example: Full MCPCat integration with mark3labs/mcp-go
+// Example: Full AgentCat integration with mark3labs/mcp-go
 //
-// This demonstrates all MCPCat options: user identification, sensitive data
+// This demonstrates all AgentCat options: user identification, sensitive data
 // redaction, debug logging, tool-call context capture, and missing-tool
 // reporting.
 //
@@ -53,7 +53,7 @@ func main() {
 		"1.0.0",
 	)
 
-	// --- MCPCat: full options ---
+	// --- AgentCat: full options ---
 	projectID := os.Getenv("MCPCAT_PROJECT_ID")
 	if projectID == "" {
 		projectID = "proj_YOUR_PROJECT_ID"
@@ -84,7 +84,7 @@ func main() {
 		log.Fatalf("agentcat: %v", err)
 	}
 	defer shutdown(context.Background())
-	// --- end MCPCat ---
+	// --- end AgentCat ---
 
 	s.AddTool(
 		mcp.NewTool("echo",

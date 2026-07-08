@@ -30,11 +30,18 @@ func getOrCreateSession(
 	}
 
 	rawSessionID := serverSession.ID()
-	if rawSessionID == "" {
+
+	// Derive a deterministic session ID from the transport session ID so
+	// sessions are stable across server restarts. Fall back to a random ID
+	// when there is no transport session ID (e.g. stdio).
+	var formattedSessionID string
+	if rawSessionID != "" {
+		formattedSessionID = agentcat.DeriveSessionID(rawSessionID, projectID)
+	} else {
 		rawSessionID = "nosessionid"
+		formattedSessionID = agentcat.NewSessionID()
 	}
 
-	formattedSessionID := agentcat.NewSessionID()
 	newPS := &agentcat.ProtectedSession{
 		Sess: &agentcat.Session{
 			SessionID: &formattedSessionID,

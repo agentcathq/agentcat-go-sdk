@@ -14,11 +14,17 @@ type (
 	Exporter         = core.Exporter
 	ExporterConfig   = core.ExporterConfig
 	Event            = core.Event
-	MCPcatInstance   = core.MCPcatInstance
+	AgentCatInstance = core.AgentCatInstance
 	Session          = core.Session
+	CustomEventData  = core.CustomEventData
 	ProtectedSession = sessionmap.ProtectedSession
 	SessionMap       = sessionmap.SessionMap
 )
+
+// MCPcatInstance is the former name of AgentCatInstance.
+//
+// Deprecated: use AgentCatInstance.
+type MCPcatInstance = AgentCatInstance
 
 type IDPrefix = core.IDPrefix
 

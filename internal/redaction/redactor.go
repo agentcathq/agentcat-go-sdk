@@ -1,10 +1,23 @@
 package redaction
 
 import (
+	"reflect"
+
 	"go.agentcat.com/sdk/internal/core"
 )
 
-const redactionErrorPlaceholder = "[REDACTION_ERROR]"
+const (
+	redactionErrorPlaceholder = "[REDACTION_ERROR]"
+
+	// maxRedactionDepth bounds recursion on pathologically deep values.
+	// Recursion must be bounded here: redaction runs before truncation's
+	// cycle-safe normalization, and a stack overflow is a fatal,
+	// unrecoverable runtime error.
+	maxRedactionDepth = 100
+
+	depthLimitPlaceholder = "[MAX_DEPTH_EXCEEDED]"
+	circularPlaceholder   = "[Circular ~]"
+)
 
 // RedactEvent applies the redaction function to all string values in the event's
 // Parameters, Response, UserIntent, and Error fields. It recursively descends
@@ -41,21 +54,36 @@ func RedactEvent(event *core.Event, redactFn core.RedactFunc) error {
 	return nil
 }
 
-// redactMap recursively processes a map, creating a new map with redacted string values
+// redactMap recursively processes a map, creating a new map with redacted
+// string values. Self-referential values and excessive depth are replaced
+// with placeholders so recursion is always bounded.
 func redactMap(m map[string]any, redactFn core.RedactFunc) map[string]any {
 	if m == nil {
 		return nil
 	}
-
-	result := make(map[string]any, len(m))
-	for k, v := range m {
-		result[k] = redactValue(v, redactFn)
-	}
+	result, _ := redactMapBounded(m, redactFn, make(map[uintptr]bool), maxRedactionDepth).(map[string]any)
 	return result
 }
 
-// redactValue recursively processes a value based on its type
-func redactValue(v any, redactFn core.RedactFunc) any {
+func redactMapBounded(m map[string]any, redactFn core.RedactFunc, memo map[uintptr]bool, depth int) any {
+	ptr := reflect.ValueOf(m).Pointer()
+	if memo[ptr] {
+		return circularPlaceholder
+	}
+	if depth <= 0 {
+		return depthLimitPlaceholder
+	}
+	memo[ptr] = true
+	result := make(map[string]any, len(m))
+	for k, v := range m {
+		result[k] = redactValue(v, redactFn, memo, depth-1)
+	}
+	delete(memo, ptr)
+	return result
+}
+
+// redactValue recursively processes a value based on its type.
+func redactValue(v any, redactFn core.RedactFunc, memo map[uintptr]bool, depth int) any {
 	if v == nil {
 		return nil
 	}
@@ -67,14 +95,26 @@ func redactValue(v any, redactFn core.RedactFunc) any {
 
 	case map[string]any:
 		// Recursively redact nested maps
-		return redactMap(val, redactFn)
+		return redactMapBounded(val, redactFn, memo, depth)
 
 	case []any:
-		// Recursively redact slices
+		// Recursively redact slices (cycle- and depth-guarded like maps)
+		if len(val) == 0 {
+			return val
+		}
+		ptr := reflect.ValueOf(val).Pointer()
+		if memo[ptr] {
+			return circularPlaceholder
+		}
+		if depth <= 0 {
+			return depthLimitPlaceholder
+		}
+		memo[ptr] = true
 		result := make([]any, len(val))
 		for i, item := range val {
-			result[i] = redactValue(item, redactFn)
+			result[i] = redactValue(item, redactFn, memo, depth-1)
 		}
+		delete(memo, ptr)
 		return result
 
 	default:

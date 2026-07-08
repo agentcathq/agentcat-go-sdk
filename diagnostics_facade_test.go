@@ -13,7 +13,7 @@ import (
 func captureLogger(t *testing.T, buf *bytes.Buffer) {
 	t.Helper()
 	lg := logging.New()
-	lg.SwapWriterForTest(log.New(buf, "[MCPCat] ", log.LstdFlags))
+	lg.SwapWriterForTest(log.New(buf, "[AgentCat] ", log.LstdFlags))
 }
 
 func TestInitDiagnostics_EmitsStartBeacon(t *testing.T) {
@@ -28,7 +28,7 @@ func TestInitDiagnostics_EmitsStartBeacon(t *testing.T) {
 	InitDiagnostics("proj_abc", true, "officialsdk", "github.com/modelcontextprotocol/go-sdk")
 
 	out := buf.String()
-	if !strings.Contains(out, "MCPCat setup started") ||
+	if !strings.Contains(out, "AgentCat setup started") ||
 		!strings.Contains(out, "proj_abc") ||
 		!strings.Contains(out, "integration officialsdk") {
 		t.Fatalf("start beacon missing/incomplete: %q", out)
@@ -63,7 +63,7 @@ func TestLogSetupComplete_MetadataOnly(t *testing.T) {
 	LogSetupComplete("proj_abc", &Options{DisableToolCallContext: false, DisableReportMissing: true})
 
 	out := buf.String()
-	if !strings.Contains(out, "MCPCat setup complete") ||
+	if !strings.Contains(out, "AgentCat setup complete") ||
 		!strings.Contains(out, "proj_abc") ||
 		!strings.Contains(out, "context=true") ||
 		!strings.Contains(out, "report_missing=false") {
@@ -83,7 +83,7 @@ func TestLogSetupFailed_IsError(t *testing.T) {
 	LogSetupFailed("projectID must not be empty")
 
 	out := buf.String()
-	if !strings.Contains(out, "ERROR:") || !strings.Contains(out, "MCPCat setup failed") {
+	if !strings.Contains(out, "ERROR:") || !strings.Contains(out, "AgentCat setup failed") {
 		t.Fatalf("failure must log ERROR: %q", out)
 	}
 }

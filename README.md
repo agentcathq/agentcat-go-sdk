@@ -130,9 +130,59 @@ shutdown, err := agentcat.Track(s, "proj_YOUR_PROJECT_ID", &agentcat.Options{
 })
 ```
 
+### Telemetry Exporters
+
+Send every captured event to your existing observability stack — in addition to (or instead of) the AgentCat platform. Four exporters are available: `otlp`, `datadog`, `sentry`, and `posthog`. Exporters run fire-and-forget in parallel with the AgentCat API send; an exporter failure never affects your server or the other exporters.
+
+```go
+shutdown, err := agentcat.Track(s, "proj_YOUR_PROJECT_ID", &agentcat.Options{
+    Exporters: map[string]agentcat.ExporterConfig{
+        // OpenTelemetry (any OTLP/HTTP collector; /v1/traces is appended automatically)
+        "otlp": {
+            Type:     "otlp",
+            Endpoint: "http://localhost:4318",
+            Headers:  map[string]string{"Authorization": "Bearer TOKEN"}, // optional
+        },
+        // Datadog (logs + metrics)
+        "datadog": {
+            Type:    "datadog",
+            APIKey:  os.Getenv("DD_API_KEY"),
+            Site:    "datadoghq.com", // or datadoghq.eu, us3.datadoghq.com, ...
+            Service: "my-mcp-server",
+            Env:     "production", // optional
+        },
+        // Sentry (logs always; error events create Issues; transactions with EnableTracing)
+        "sentry": {
+            Type:          "sentry",
+            DSN:           os.Getenv("SENTRY_DSN"),
+            Environment:   "production", // optional
+            Release:       "1.2.3",      // optional
+            EnableTracing: true,         // optional, default false
+        },
+        // PostHog (batch capture; $exception on errors; $ai_span with EnableAITracing)
+        "posthog": {
+            Type:            "posthog",
+            APIKey:          os.Getenv("POSTHOG_API_KEY"),
+            Host:            "https://us.i.posthog.com", // optional, default shown
+            EnableAITracing: true,                       // optional, default false
+        },
+    },
+})
+```
+
+**Telemetry-only mode**: pass an empty project ID (`""`) with at least one exporter configured, and events go only to your exporters — no AgentCat account required.
+
+```go
+shutdown, err := agentcat.Track(s, "", &agentcat.Options{
+    Exporters: map[string]agentcat.ExporterConfig{
+        "otlp": {Type: "otlp", Endpoint: "http://localhost:4318"},
+    },
+})
+```
+
 ### Debug Mode
 
-Enable debug logging for troubleshooting. Debug logs are written to `~/mcpcat.log`.
+Enable debug logging for troubleshooting. Debug logs are written to `~/agentcat.log`.
 
 ```go
 shutdown, err := agentcat.Track(s, "proj_YOUR_PROJECT_ID", &agentcat.Options{Debug: true})
@@ -152,7 +202,7 @@ To help us catch and fix broken installs, the SDK sends AgentCat a small, anonym
 signal when setup or runtime errors occur — never your tool calls, your responses,
 or anything about your users. Records carry only operational metadata, such as your
 project ID (or an anonymous install ID when none is set), SDK version, and Go
-runtime/OS/arch. Your local `~/mcpcat.log` is unchanged.
+runtime/OS/arch. Your local `~/agentcat.log` is unchanged.
 
 Diagnostics are on by default and can be turned off completely with either:
 
@@ -165,10 +215,12 @@ Diagnostics are on by default and can be turned off completely with either:
 |--------|------|---------|-------------|
 | `DisableReportMissing` | `bool` | `false` | When `true`, prevents the `get_more_tools` tool from being registered |
 | `DisableToolCallContext` | `bool` | `false` | When `true`, prevents the `context` parameter from being injected on tool calls |
-| `Debug` | `bool` | `false` | Enable debug logging to `~/mcpcat.log` |
+| `Debug` | `bool` | `false` | Enable debug logging to `~/agentcat.log` |
 | `RedactSensitiveInformation` | `func(string) string` | `nil` | Custom redaction applied to all text data before sending |
 | `Identify` | callback | `nil` | Attach user information to sessions |
 | `Hooks` | `*server.Hooks` | `nil` | Pre-existing hooks to merge with (mcp-go only) |
+| `Exporters` | `map[string]ExporterConfig` | `nil` | Telemetry exporters (`otlp`, `datadog`, `sentry`, `posthog`); with at least one exporter, the project ID may be empty (telemetry-only mode) |
+| `APIBaseURL` | `string` | `https://api.agentcat.com` | Override the AgentCat API endpoint; falls back to `AGENTCAT_API_URL`, then the legacy `MCPCAT_API_URL` env var |
 
 ## Free for open source
 

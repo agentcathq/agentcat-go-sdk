@@ -15,14 +15,17 @@ const (
 )
 
 // ProtectedSession wraps a *core.Session with a mutex to protect concurrent
-// access to its fields, and a sync.Once to ensure the Identify callback is
-// invoked at most once per session.
+// access to its fields.
 //
 // Call Touch() on every access to keep the session alive in its SessionMap.
 type ProtectedSession struct {
-	Mu           sync.Mutex
-	Sess         *core.Session
-	IdentifyOnce sync.Once
+	Mu   sync.Mutex
+	Sess *core.Session
+
+	// Identity is the most recent merged identity for this session, used to
+	// detect identity changes so identify events are only published when the
+	// identity actually changes. Guarded by Mu.
+	Identity *core.UserIdentity
 
 	// lastAccessNano is updated atomically so any goroutine can call Touch
 	// without holding the SessionMap lock.

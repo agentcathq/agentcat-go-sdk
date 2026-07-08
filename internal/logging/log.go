@@ -1,5 +1,5 @@
-// Package logging provides internal logging utilities for MCPCat.
-// Logs are written to ~/mcpcat.log to avoid interfering with STDIO-based MCP servers.
+// Package logging provides internal logging utilities for AgentCat.
+// Logs are written to ~/agentcat.log to avoid interfering with STDIO-based MCP servers.
 package logging
 
 import (
@@ -51,7 +51,7 @@ func (l *Logger) emit(level Level, prefix, msg string) {
 	l.logger.Printf("%s: %s", prefix, msg)
 }
 
-// Logger provides logging functionality for MCPCat
+// Logger provides logging functionality for AgentCat
 type Logger struct {
 	file   *os.File
 	logger *log.Logger
@@ -123,17 +123,17 @@ func newLogger() *Logger {
 	} else {
 		writer = io.Discard
 	}
-	l.logger = log.New(writer, "[MCPCat] ", log.LstdFlags)
+	l.logger = log.New(writer, "[AgentCat] ", log.LstdFlags)
 
 	return l
 }
 
-// openLogFile opens ~/mcpcat.log for appending. On failure the file field
+// openLogFile opens ~/agentcat.log for appending. On failure the file field
 // stays nil and all output silently goes to io.Discard, which avoids ever
 // falling back to stderr and corrupting STDIO-based MCP transport.
 func (l *Logger) openLogFile() {
 	homeDir, _ := os.UserHomeDir()
-	logPath := filepath.Join(homeDir, "mcpcat.log")
+	logPath := filepath.Join(homeDir, "agentcat.log")
 	file, err := os.OpenFile(logPath, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0644)
 	if err != nil {
 		l.file = nil

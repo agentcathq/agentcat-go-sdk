@@ -203,9 +203,9 @@ func TestStdio_IdentifyInvoked(t *testing.T) {
 		t.Error("expected Identify function to be called")
 	}
 
-	identifyEvents := filterEvents(events, "mcpcat:identify")
+	identifyEvents := filterEvents(events, "agentcat:identify")
 	if len(identifyEvents) == 0 {
-		t.Fatal("expected an mcpcat:identify event to be published")
+		t.Fatal("expected an agentcat:identify event to be published")
 	}
 
 	evt := identifyEvents[0]

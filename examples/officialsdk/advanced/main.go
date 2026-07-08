@@ -1,6 +1,6 @@
-// Example: Full MCPCat integration with the official Go MCP SDK
+// Example: Full AgentCat integration with the official Go MCP SDK
 //
-// This demonstrates all MCPCat options: user identification, sensitive data
+// This demonstrates all AgentCat options: user identification, sensitive data
 // redaction, debug logging, tool-call context capture, and missing-tool
 // reporting.
 //
@@ -72,7 +72,7 @@ func main() {
 		nil,
 	)
 
-	// --- MCPCat: full options ---
+	// --- AgentCat: full options ---
 	projectID := os.Getenv("MCPCAT_PROJECT_ID")
 	if projectID == "" {
 		projectID = "proj_YOUR_PROJECT_ID"
@@ -103,7 +103,7 @@ func main() {
 		log.Fatalf("agentcat: %v", err)
 	}
 	defer shutdown(context.Background())
-	// --- end MCPCat ---
+	// --- end AgentCat ---
 
 	mcp.AddTool(s, &mcp.Tool{
 		Name:        "echo",
