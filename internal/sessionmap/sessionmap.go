@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"go.agentcat.com/sdk/internal/core"
+	"go.agentcat.com/sdk/internal/event"
 )
 
 const (
@@ -22,9 +23,8 @@ type ProtectedSession struct {
 	Mu   sync.Mutex
 	Sess *core.Session
 
-	// Identity is the most recent merged identity for this session, used to
-	// detect identity changes so identify events are only published when the
-	// identity actually changes. Guarded by Mu.
+	// Identity is the previous merged identity for this session, kept so
+	// UserData merges across identify calls. Guarded by Mu.
 	Identity *core.UserIdentity
 
 	// lastAccessNano is updated atomically so any goroutine can call Touch
@@ -40,6 +40,30 @@ func (ps *ProtectedSession) Touch() {
 
 func (ps *ProtectedSession) lastAccessTime() time.Time {
 	return time.Unix(0, ps.lastAccessNano.Load())
+}
+
+// ApplyIdentity merges id into the session's identity under the session lock
+// (UserID and UserName are overwritten; UserData is merged), stamps the
+// session's identify fields, and returns the merged identity plus a new
+// agentcat:identify event. The lock is released via defer so a panic can
+// never leave the session mutex held; callers publish the returned event
+// outside the lock. A nil id returns (nil, nil).
+func (ps *ProtectedSession) ApplyIdentity(id *core.UserIdentity) (*core.UserIdentity, *core.Event) {
+	if id == nil {
+		return nil, nil
+	}
+
+	ps.Mu.Lock()
+	defer ps.Mu.Unlock()
+
+	merged := core.MergeIdentities(ps.Identity, id)
+	ps.Identity = merged
+
+	ps.Sess.IdentifyActorGivenId = &merged.UserID
+	ps.Sess.IdentifyActorName = &merged.UserName
+	ps.Sess.IdentifyData = merged.UserData
+
+	return merged, event.CreateIdentifyEvent(ps.Sess)
 }
 
 // SessionMap is a concurrent map of raw session IDs to ProtectedSessions
@@ -65,6 +89,19 @@ func New(ttl time.Duration) *SessionMap {
 	}
 	go m.evictionLoop()
 	return m
+}
+
+// Load returns the existing session for rawSessionID, or (nil, false) when no
+// entry exists. A returned session is automatically Touch()-ed.
+func (m *SessionMap) Load(rawSessionID string) (*ProtectedSession, bool) {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+
+	if existing, ok := m.sessions[rawSessionID]; ok {
+		existing.Touch()
+		return existing, true
+	}
+	return nil, false
 }
 
 // LoadOrStore returns the existing session for rawSessionID, or stores and

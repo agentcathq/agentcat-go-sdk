@@ -157,7 +157,7 @@ func visit(value any, remainingDepth int, memo map[uintptr]bool, converted bool)
 		// Unknown type (struct, typed map/slice, etc). Try a JSON round-trip
 		// once so nested strings and collections are normalized too.
 		if !converted {
-			if roundTripped, ok := jsonRoundTrip(v); ok {
+			if roundTripped, ok := core.JSONRoundTrip(v); ok {
 				return visit(roundTripped, remainingDepth, memo, true)
 			}
 		}
@@ -169,6 +169,16 @@ func visit(value any, remainingDepth int, memo map[uintptr]bool, converted bool)
 func visitMap(m map[string]any, remainingDepth int, memo map[uintptr]bool) map[string]any {
 	result := make(map[string]any, len(m))
 
+	// At or below the breadth limit no trimming occurs and map output order
+	// is irrelevant, so skip the sort.
+	if len(m) <= MaxBreadth {
+		for k, v := range m {
+			result[k] = visit(v, remainingDepth, memo, false)
+		}
+		return result
+	}
+
+	// Over the limit: sort keys so the kept subset is deterministic.
 	keys := make([]string, 0, len(m))
 	for k := range m {
 		keys = append(keys, k)
@@ -209,18 +219,6 @@ func normalizeMapField(m map[string]any, depth int) map[string]any {
 		return normalized
 	}
 	return m
-}
-
-func jsonRoundTrip(v any) (any, bool) {
-	data, err := json.Marshal(v)
-	if err != nil {
-		return nil, false
-	}
-	var result any
-	if err := json.Unmarshal(data, &result); err != nil {
-		return nil, false
-	}
-	return result, true
 }
 
 // --- Field-level truncation helpers ---

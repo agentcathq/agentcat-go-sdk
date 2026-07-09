@@ -126,16 +126,19 @@ type posthogCaptureEvent struct {
 // Export sends the event (plus an optional $exception and $ai_span) to
 // PostHog as a single batch.
 func (e *PostHogExporter) Export(event *core.Event) error {
-	batch := []posthogCaptureEvent{e.buildCaptureEvent(event)}
+	// Compute the deterministic session UUID once; every batch entry uses it.
+	sessionUUID := ToUUIDv7(event.GetSessionId())
+
+	batch := []posthogCaptureEvent{e.buildCaptureEvent(event, sessionUUID)}
 
 	// Send an $exception event alongside if this is an error.
 	if event.GetIsError() && event.Error != nil {
-		batch = append(batch, e.buildExceptionEvent(event))
+		batch = append(batch, e.buildExceptionEvent(event, sessionUUID))
 	}
 
 	// Send an $ai_span for tool calls when AI tracing is enabled.
 	if e.enableAITracing && event.GetEventType() == mcpToolsCallEventType {
-		batch = append(batch, e.buildAISpanEvent(event))
+		batch = append(batch, e.buildAISpanEvent(event, sessionUUID))
 	}
 
 	e.logger.Debugf("PostHogExporter: sending %d event(s) for %s", len(batch), event.GetId())
@@ -148,22 +151,16 @@ func (e *PostHogExporter) Export(event *core.Event) error {
 		return fmt.Errorf("posthog export error: %w", err)
 	}
 
-	resp, err := doPost(e.batchURL, map[string]string{"Content-Type": "application/json"}, bytes.NewReader(body))
-	if err != nil {
+	if err := doPost(e.batchURL, map[string]string{"Content-Type": "application/json"}, bytes.NewReader(body)); err != nil {
 		return fmt.Errorf("posthog export error: %w", err)
-	}
-	defer resp.Body.Close()
-
-	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
-		return fmt.Errorf("posthog export failed: %s", resp.Status)
 	}
 
 	return nil
 }
 
-func (e *PostHogExporter) buildCaptureEvent(event *core.Event) posthogCaptureEvent {
+func (e *PostHogExporter) buildCaptureEvent(event *core.Event, sessionUUID string) posthogCaptureEvent {
 	properties := map[string]any{
-		"$session_id": ToUUIDv7(event.GetSessionId()),
+		"$session_id": sessionUUID,
 		"source":      sourceValue,
 	}
 
@@ -176,17 +173,12 @@ func (e *PostHogExporter) buildCaptureEvent(event *core.Event) posthogCaptureEve
 	if event.Duration != nil {
 		properties["duration_ms"] = *event.Duration
 	}
-	setIfNotEmpty := func(key, value string) {
-		if value != "" {
-			properties[key] = value
-		}
-	}
-	setIfNotEmpty("server_name", event.GetServerName())
-	setIfNotEmpty("server_version", event.GetServerVersion())
-	setIfNotEmpty("client_name", event.GetClientName())
-	setIfNotEmpty("client_version", event.GetClientVersion())
-	setIfNotEmpty("project_id", event.GetProjectId())
-	setIfNotEmpty("user_intent", event.GetUserIntent())
+	setIfNotEmpty(properties, "server_name", event.GetServerName())
+	setIfNotEmpty(properties, "server_version", event.GetServerVersion())
+	setIfNotEmpty(properties, "client_name", event.GetClientName())
+	setIfNotEmpty(properties, "client_version", event.GetClientVersion())
+	setIfNotEmpty(properties, "project_id", event.GetProjectId())
+	setIfNotEmpty(properties, "user_intent", event.GetUserIntent())
 	if event.IsError != nil {
 		properties["is_error"] = *event.IsError
 	}
@@ -228,10 +220,10 @@ func (e *PostHogExporter) buildCaptureEvent(event *core.Event) posthogCaptureEve
 	}
 }
 
-func (e *PostHogExporter) buildExceptionEvent(event *core.Event) posthogCaptureEvent {
+func (e *PostHogExporter) buildExceptionEvent(event *core.Event, sessionUUID string) posthogCaptureEvent {
 	properties := map[string]any{
 		"$exception_source": "backend",
-		"$session_id":       ToUUIDv7(event.GetSessionId()),
+		"$session_id":       sessionUUID,
 	}
 
 	if event.Error != nil {
@@ -253,15 +245,10 @@ func (e *PostHogExporter) buildExceptionEvent(event *core.Event) posthogCaptureE
 			properties["tool_name"] = rn
 		}
 	}
-	setIfNotEmpty := func(key, value string) {
-		if value != "" {
-			properties[key] = value
-		}
-	}
-	setIfNotEmpty("server_name", event.GetServerName())
-	setIfNotEmpty("server_version", event.GetServerVersion())
-	setIfNotEmpty("client_name", event.GetClientName())
-	setIfNotEmpty("client_version", event.GetClientVersion())
+	setIfNotEmpty(properties, "server_name", event.GetServerName())
+	setIfNotEmpty(properties, "server_version", event.GetServerVersion())
+	setIfNotEmpty(properties, "client_name", event.GetClientName())
+	setIfNotEmpty(properties, "client_version", event.GetClientVersion())
 
 	return posthogCaptureEvent{
 		Event:      "$exception",
@@ -272,14 +259,14 @@ func (e *PostHogExporter) buildExceptionEvent(event *core.Event) posthogCaptureE
 	}
 }
 
-func (e *PostHogExporter) buildAISpanEvent(event *core.Event) posthogCaptureEvent {
+func (e *PostHogExporter) buildAISpanEvent(event *core.Event, sessionUUID string) posthogCaptureEvent {
 	properties := map[string]any{
 		"$ai_session_id": "agentcat_" + event.GetSessionId(),
-		"$ai_trace_id":   ToUUIDv7(event.GetSessionId()),
+		"$ai_trace_id":   sessionUUID,
 		"$ai_span_id":    ToUUIDv7(event.GetId()),
 		"$ai_span_name":  orDefault(event.GetResourceName(), "unknown_tool"),
 		"$ai_is_error":   event.GetIsError(),
-		"$session_id":    ToUUIDv7(event.GetSessionId()),
+		"$session_id":    sessionUUID,
 		"source":         sourceValue,
 	}
 

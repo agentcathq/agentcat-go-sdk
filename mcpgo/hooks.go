@@ -154,22 +154,7 @@ func addTracingToHooks(hooks *server.Hooks, opts *Options, publishFn func(*agent
 			}
 		}
 
-		// Attach customer-defined tags and properties.
-		attachEventMetadata(ctx, opts, message, evt)
-
-		// Ensure identity fields are on the event if Identify just ran.
-		// NewEvent may have been called before Identify populated the session.
-		func() {
-			ps.Mu.Lock()
-			defer ps.Mu.Unlock()
-			if ps.Sess.IdentifyActorGivenId != nil && evt.IdentifyActorGivenId == nil {
-				evt.IdentifyActorGivenId = ps.Sess.IdentifyActorGivenId
-				evt.IdentifyActorName = ps.Sess.IdentifyActorName
-				evt.IdentifyData = ps.Sess.IdentifyData
-			}
-		}()
-
-		publishFn(evt)
+		finishEvent(ctx, opts, message, ps, evt, publishFn)
 	})
 
 	// OnError: capture session, create and publish error event
@@ -230,22 +215,38 @@ func addTracingToHooks(hooks *server.Hooks, opts *Options, publishFn func(*agent
 			}
 		}
 
-		// Attach customer-defined tags and properties.
-		attachEventMetadata(ctx, opts, message, evt)
-
-		// Ensure identity fields are on the event if Identify just ran.
-		func() {
-			ps.Mu.Lock()
-			defer ps.Mu.Unlock()
-			if ps.Sess.IdentifyActorGivenId != nil && evt.IdentifyActorGivenId == nil {
-				evt.IdentifyActorGivenId = ps.Sess.IdentifyActorGivenId
-				evt.IdentifyActorName = ps.Sess.IdentifyActorName
-				evt.IdentifyData = ps.Sess.IdentifyData
-			}
-		}()
-
-		publishFn(evt)
+		finishEvent(ctx, opts, message, ps, evt, publishFn)
 	})
 
 	return sessionMap
+}
+
+// finishEvent applies the shared closing steps of the OnSuccess and OnError
+// hooks: attach customer-defined tags and properties, backfill identity
+// fields onto the event if Identify just ran (NewEvent may have been called
+// before Identify populated the session), and publish.
+func finishEvent(
+	ctx context.Context,
+	opts *Options,
+	message any,
+	ps *agentcat.ProtectedSession,
+	evt *agentcat.Event,
+	publishFn func(*agentcat.Event),
+) {
+	// Attach customer-defined tags and properties.
+	attachEventMetadata(ctx, opts, message, evt)
+
+	// Backfill identity under lock; the lock is released via defer so a panic
+	// can never leave the session mutex held.
+	func() {
+		ps.Mu.Lock()
+		defer ps.Mu.Unlock()
+		if ps.Sess.IdentifyActorGivenId != nil && evt.IdentifyActorGivenId == nil {
+			evt.IdentifyActorGivenId = ps.Sess.IdentifyActorGivenId
+			evt.IdentifyActorName = ps.Sess.IdentifyActorName
+			evt.IdentifyData = ps.Sess.IdentifyData
+		}
+	}()
+
+	publishFn(evt)
 }

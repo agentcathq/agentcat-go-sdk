@@ -54,6 +54,19 @@ func DeriveSessionIDFromMCPSession(mcpSessionID, projectID string) string {
 	return fmt.Sprintf("%s_%s", core.PrefixSession, id.String())
 }
 
+// IsPlaceholderSessionID reports whether raw is a placeholder rather than a
+// real transport session ID: "" (no session ID), "stdio" (the constant
+// session ID mcp-go reports for stdio transports — every stdio process
+// reports the same value), or "nosessionid" (the shared fallback map key).
+// Placeholder IDs must not be used to derive a deterministic session ID.
+func IsPlaceholderSessionID(raw string) bool {
+	switch raw {
+	case "", "stdio", "nosessionid":
+		return true
+	}
+	return false
+}
+
 // GetDependencyVersion returns the version of the given module from build info,
 // or "dev" if the module is not found.
 func GetDependencyVersion(modulePath string) string {

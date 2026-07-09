@@ -87,6 +87,14 @@ func NewSessionID() string {
 	return session.GenerateSessionID()
 }
 
+// IsPlaceholderSessionID reports whether raw is a placeholder rather than a
+// real transport session ID ("", "stdio", or "nosessionid"). Placeholder IDs
+// must not be used to derive a deterministic session ID; adapters fall back
+// to a random session ID instead.
+func IsPlaceholderSessionID(raw string) bool {
+	return session.IsPlaceholderSessionID(raw)
+}
+
 // DeriveSessionID derives a deterministic session ID from an MCP transport
 // session ID and optional project ID. The same inputs always produce the same
 // session ID, so sessions remain stable across server restarts. The

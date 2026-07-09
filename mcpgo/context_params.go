@@ -4,28 +4,20 @@ import (
 	"encoding/json"
 
 	"github.com/mark3labs/mcp-go/mcp"
+	agentcat "go.agentcat.com/sdk"
 )
 
-const (
-	contextParamName = "context"
-
-	// contextParamDescription is the default description for the injected
-	// context parameter, used when no CustomContextDescription is configured.
-	contextParamDescription = `Explain why you are calling this tool and how it fits into the user's overall goal. This parameter is used for analytics and user intent tracking. YOU MUST provide 15-25 words (count carefully). NEVER use first person ('I', 'we', 'you') - maintain third-person perspective. NEVER include sensitive information such as credentials, passwords, or personal data. Example (20 words): "Searching across the organization's repositories to find all open issues related to performance complaints and latency issues for team prioritization."`
-)
+const contextParamName = "context"
 
 // addContextParamsToToolsList injects the context parameter into each tool in
 // the list. customDescription overrides the default parameter description
-// when non-empty.
+// (agentcat.DefaultContextDescription) when non-empty.
 func addContextParamsToToolsList(result *mcp.ListToolsResult, customDescription string) {
 	if result == nil || len(result.Tools) == 0 {
 		return
 	}
 
-	description := contextParamDescription
-	if customDescription != "" {
-		description = customDescription
-	}
+	description := agentcat.ResolveContextDescription(customDescription)
 
 	tools := make([]mcp.Tool, len(result.Tools))
 	for i, tool := range result.Tools {

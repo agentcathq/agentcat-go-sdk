@@ -4,6 +4,7 @@ import (
 	"context"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -332,7 +333,9 @@ func TestMiddleware_CapturesInitializeEvent(t *testing.T) {
 }
 
 func TestMiddleware_WithIdentify(t *testing.T) {
-	identifyCalled := false
+	// The callback runs on detached capture goroutines (one per captured
+	// event), so the flag must be synchronized with the test goroutine.
+	var identifyCalled atomic.Bool
 	opts := DefaultOptions()
 	opts.Identify = func(ctx context.Context, request mcp.Request) *agentcat.UserIdentity {
 		// Gate to tool calls so initialize/notification captures do not emit
@@ -340,7 +343,7 @@ func TestMiddleware_WithIdentify(t *testing.T) {
 		if _, ok := request.(*mcp.CallToolRequest); !ok {
 			return nil
 		}
-		identifyCalled = true
+		identifyCalled.Store(true)
 		return &agentcat.UserIdentity{
 			UserID:   "user_123",
 			UserName: "Test User",
@@ -366,7 +369,7 @@ func TestMiddleware_WithIdentify(t *testing.T) {
 	// The identify event and tool call event are both published for the first tool call.
 	events := mock.waitForEvents(4, 3*time.Second)
 
-	if !identifyCalled {
+	if !identifyCalled.Load() {
 		t.Error("expected Identify function to be called")
 	}
 

@@ -268,7 +268,7 @@ func captureEvent(
 // it returns a non-nil identity, merges it into the session identity and
 // publishes an agentcat:identify event. UserID and UserName are overwritten;
 // UserData is merged. The merged identity is also copied onto the in-flight
-// event. A panic in the callback is swallowed.
+// event. A panic in the callback is recovered and logged.
 func handleIdentify(
 	ctx context.Context,
 	opts *Options,
@@ -282,23 +282,9 @@ func handleIdentify(
 		return
 	}
 
-	// Merge and stamp under lock; the lock is released via defer so a panic
-	// can never leave the session mutex held.
-	var merged *agentcat.UserIdentity
-	var identifyEvent *agentcat.Event
-	func() {
-		ps.Mu.Lock()
-		defer ps.Mu.Unlock()
-
-		merged = agentcat.MergeIdentities(ps.Identity, identifyInfo)
-		ps.Identity = merged
-
-		ps.Sess.IdentifyActorGivenId = &merged.UserID
-		ps.Sess.IdentifyActorName = &merged.UserName
-		ps.Sess.IdentifyData = merged.UserData
-
-		identifyEvent = agentcat.CreateIdentifyEvent(ps.Sess)
-	}()
+	// Merge and stamp under the session lock (owned by ApplyIdentity);
+	// publish outside the lock.
+	merged, identifyEvent := ps.ApplyIdentity(identifyInfo)
 
 	// Copy the merged identity onto the in-flight event.
 	evt.IdentifyActorGivenId = &merged.UserID
@@ -315,6 +301,7 @@ func handleIdentify(
 func safeIdentify(ctx context.Context, opts *Options, req mcp.Request) (identity *agentcat.UserIdentity) {
 	defer func() {
 		if r := recover(); r != nil {
+			agentcat.LogRecoveredPanic("officialsdk Identify callback", r)
 			identity = nil
 		}
 	}()

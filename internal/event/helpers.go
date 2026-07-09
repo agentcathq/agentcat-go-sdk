@@ -1,7 +1,6 @@
 package event
 
 import (
-	"encoding/json"
 	"fmt"
 	"time"
 
@@ -58,25 +57,17 @@ func NewEvent(session *core.Session, eventType string, duration *int32, isError 
 }
 
 // ConvertToMap converts any value (including structs, slices of structs) to
-// map[string]any or []any by marshaling to JSON and unmarshaling back. This
-// ensures the redactor can process all fields. If conversion fails, the
-// original value is returned to avoid impacting the server.
+// map[string]any or []any via core.JSONRoundTrip. This ensures the redactor
+// can process all fields. If conversion fails, the original value is returned
+// to avoid impacting the server.
 func ConvertToMap(v any) any {
 	if v == nil {
 		return nil
 	}
-
-	data, err := json.Marshal(v)
-	if err != nil {
-		return v
+	if result, ok := core.JSONRoundTrip(v); ok {
+		return result
 	}
-
-	var result any
-	if err := json.Unmarshal(data, &result); err != nil {
-		return v
-	}
-
-	return result
+	return v
 }
 
 // CopySessionToEvent copies session metadata fields to the event.

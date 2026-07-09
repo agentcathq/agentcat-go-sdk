@@ -8,10 +8,10 @@ package sanitization
 import (
 	"fmt"
 	"maps"
-	"reflect"
 	"regexp"
 
 	"go.agentcat.com/sdk/internal/core"
+	"go.agentcat.com/sdk/internal/walk"
 )
 
 const (
@@ -19,14 +19,12 @@ const (
 	// is tested, to avoid regex work on small strings.
 	sizeGate = 10240
 
-	// maxSanitizeDepth bounds recursion on pathologically deep values.
-	// Recursion must be bounded here: sanitization runs before truncation's
-	// cycle-safe normalization, and a stack overflow is a fatal,
-	// unrecoverable runtime error.
-	maxSanitizeDepth = 100
-
-	depthLimitPlaceholder = "[MAX_DEPTH_EXCEEDED]"
-	circularPlaceholder   = "[Circular ~]"
+	// Placeholders produced by the shared bounded walk. Recursion must be
+	// bounded here: sanitization runs before truncation's cycle-safe
+	// normalization, and a stack overflow is a fatal, unrecoverable runtime
+	// error.
+	depthLimitPlaceholder = walk.DepthLimitPlaceholder
+	circularPlaceholder   = walk.CircularPlaceholder
 
 	imageRedactedText          = "[image content redacted - not supported by AgentCat]"
 	audioRedactedText          = "[audio content redacted - not supported by AgentCat]"
@@ -123,59 +121,19 @@ func sanitizeResourceBlock(block map[string]any) any {
 }
 
 // sanitizeValue recursively scans a value for large base64-encoded strings and
-// replaces them with a placeholder. Maps and slices are copied, not mutated.
-// Self-referential values and excessive depth are replaced with placeholders
-// so recursion is always bounded.
+// replaces them with a placeholder via the shared bounded deep-walk. Maps and
+// slices are copied, not mutated. Self-referential values and excessive depth
+// are replaced with placeholders so recursion is always bounded.
 func sanitizeValue(v any) any {
-	return sanitizeValueBounded(v, make(map[uintptr]bool), maxSanitizeDepth)
+	return walk.Bounded(v, sanitizeString)
 }
 
-func sanitizeValueBounded(v any, memo map[uintptr]bool, depth int) any {
-	switch val := v.(type) {
-	case string:
-		if len(val) >= sizeGate && base64Pattern.MatchString(val) {
-			return binaryDataRedactedText
-		}
-		return val
-
-	case map[string]any:
-		ptr := reflect.ValueOf(val).Pointer()
-		if memo[ptr] {
-			return circularPlaceholder
-		}
-		if depth <= 0 {
-			return depthLimitPlaceholder
-		}
-		memo[ptr] = true
-		result := make(map[string]any, len(val))
-		for k, item := range val {
-			result[k] = sanitizeValueBounded(item, memo, depth-1)
-		}
-		delete(memo, ptr)
-		return result
-
-	case []any:
-		if len(val) == 0 {
-			return val
-		}
-		ptr := reflect.ValueOf(val).Pointer()
-		if memo[ptr] {
-			return circularPlaceholder
-		}
-		if depth <= 0 {
-			return depthLimitPlaceholder
-		}
-		memo[ptr] = true
-		result := make([]any, len(val))
-		for i, item := range val {
-			result[i] = sanitizeValueBounded(item, memo, depth-1)
-		}
-		delete(memo, ptr)
-		return result
-
-	default:
-		return v
+// sanitizeString replaces a large base64-looking string with a placeholder.
+func sanitizeString(s string) any {
+	if len(s) >= sizeGate && base64Pattern.MatchString(s) {
+		return binaryDataRedactedText
 	}
+	return s
 }
 
 func textBlock(text string) map[string]any {

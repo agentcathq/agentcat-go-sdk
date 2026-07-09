@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -308,7 +309,9 @@ func TestIdentify_PublishesEveryTime(t *testing.T) {
 		{UserID: "u1", UserName: "Alice", UserData: map[string]any{"plan": "free"}}, // identical to first
 		{UserID: "u1", UserName: "Alice", UserData: map[string]any{"plan": "pro"}},
 	}
-	var call int
+	// The callback runs on detached capture goroutines, so the call counter
+	// must be synchronized.
+	var call atomic.Int64
 
 	opts := DefaultOptions()
 	opts.DisableReportMissing = true
@@ -319,9 +322,7 @@ func TestIdentify_PublishesEveryTime(t *testing.T) {
 		if _, ok := request.(*mcp.CallToolRequest); !ok {
 			return nil
 		}
-		identity := identities[call%len(identities)]
-		call++
-		return identity
+		return identities[int(call.Add(1)-1)%len(identities)]
 	}
 
 	clientSession, _, mock := setupStreamableHTTP(t, opts)
@@ -363,7 +364,9 @@ func TestIdentify_MergesUserData(t *testing.T) {
 		{UserID: "u1", UserData: map[string]any{"region": "us", "plan": "free"}},
 		{UserID: "u2", UserData: map[string]any{"plan": "pro"}},
 	}
-	var call int
+	// The callback runs on detached capture goroutines, so the call counter
+	// must be synchronized.
+	var call atomic.Int64
 
 	opts := DefaultOptions()
 	opts.DisableReportMissing = true
@@ -373,9 +376,7 @@ func TestIdentify_MergesUserData(t *testing.T) {
 		if _, ok := request.(*mcp.CallToolRequest); !ok {
 			return nil
 		}
-		identity := identities[call%len(identities)]
-		call++
-		return identity
+		return identities[int(call.Add(1)-1)%len(identities)]
 	}
 
 	clientSession, _, mock := setupStreamableHTTP(t, opts)

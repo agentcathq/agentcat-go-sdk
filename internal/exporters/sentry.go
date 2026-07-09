@@ -153,8 +153,12 @@ type sentryErrorEvent struct {
 func (e *SentryExporter) Export(event *core.Event) error {
 	var errs []error
 
+	// Compute the deterministic trace/span IDs once; every envelope uses them.
+	traceID := TraceID(event.GetSessionId())
+	spanID := SpanID(event.GetId())
+
 	// ALWAYS send a log.
-	logItem := e.eventToLog(event)
+	logItem := e.eventToLog(event, traceID, spanID)
 	envelope, err := e.createLogEnvelope(logItem)
 	if err != nil {
 		errs = append(errs, fmt.Errorf("sentry log envelope: %w", err))
@@ -165,7 +169,7 @@ func (e *SentryExporter) Export(event *core.Event) error {
 	// OPTIONALLY send a transaction for performance monitoring.
 	var transaction *sentryTransaction
 	if e.enableTracing {
-		tx := e.eventToTransaction(event)
+		tx := e.eventToTransaction(event, traceID, spanID)
 		transaction = &tx
 		envelope, err := e.createTransactionEnvelope(tx)
 		if err != nil {
@@ -177,7 +181,7 @@ func (e *SentryExporter) Export(event *core.Event) error {
 
 	// ALWAYS send an error event for Issue creation when this is an error.
 	if event.GetIsError() {
-		errorEvent := e.eventToErrorEvent(event, transaction)
+		errorEvent := e.eventToErrorEvent(event, transaction, traceID, spanID)
 		envelope, err := e.createErrorEnvelope(errorEvent)
 		if err != nil {
 			errs = append(errs, fmt.Errorf("sentry error envelope: %w", err))
@@ -194,22 +198,14 @@ func (e *SentryExporter) sendEnvelope(envelope string) error {
 		"X-Sentry-Auth": e.authHeader,
 		"Content-Type":  "application/x-sentry-envelope",
 	}
-	resp, err := doPost(e.endpoint, headers, strings.NewReader(envelope))
-	if err != nil {
-		return err
-	}
-	defer resp.Body.Close()
-	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
-		return fmt.Errorf("status %s", resp.Status)
-	}
-	return nil
+	return doPost(e.endpoint, headers, strings.NewReader(envelope))
 }
 
 func eventTimestampSeconds(event *core.Event) float64 {
 	return float64(eventTimestampMs(event)) / 1000
 }
 
-func (e *SentryExporter) eventToLog(event *core.Event) sentryLog {
+func (e *SentryExporter) eventToLog(event *core.Event, traceID, spanID string) sentryLog {
 	level := "info"
 	if event.GetIsError() {
 		level = "error"
@@ -220,12 +216,10 @@ func (e *SentryExporter) eventToLog(event *core.Event) sentryLog {
 		message += ": " + rn
 	}
 
-	// Deterministic 32-hex event_id derived from the event ID.
-	spanID := SpanID(event.GetId())
-
 	return sentryLog{
-		Timestamp:  eventTimestampSeconds(event),
-		TraceID:    TraceID(event.GetSessionId()),
+		Timestamp: eventTimestampSeconds(event),
+		TraceID:   traceID,
+		// Deterministic 32-hex event_id derived from the event ID.
 		EventID:    spanID + spanID,
 		Level:      level,
 		Body:       message,
@@ -278,7 +272,7 @@ func (e *SentryExporter) createLogEnvelope(logItem sentryLog) (string, error) {
 	return joinEnvelope(true, envelopeHeader, itemHeader, payload)
 }
 
-func (e *SentryExporter) eventToTransaction(event *core.Event) sentryTransaction {
+func (e *SentryExporter) eventToTransaction(event *core.Event, traceID, spanID string) sentryTransaction {
 	endTimestamp := eventTimestampSeconds(event)
 	startTimestamp := endTimestamp
 	if event.Duration != nil {
@@ -292,13 +286,13 @@ func (e *SentryExporter) eventToTransaction(event *core.Event) sentryTransaction
 
 	return sentryTransaction{
 		Type:           "transaction",
-		EventID:        SpanID(event.GetId()) + randomHex(8),
+		EventID:        spanID + randomHex(8),
 		Timestamp:      endTimestamp,
 		StartTimestamp: startTimestamp,
 		Transaction:    transactionName(event),
 		Contexts: e.buildContexts(event, sentryTraceContext{
-			TraceID: TraceID(event.GetSessionId()),
-			SpanID:  SpanID(event.GetId()),
+			TraceID: traceID,
+			SpanID:  spanID,
 			Op:      orDefault(event.GetEventType(), "mcp.event"),
 			Status:  status,
 		}),
@@ -319,18 +313,13 @@ func (e *SentryExporter) buildTags(event *core.Event) map[string]string {
 		"source": sourceValue,
 	}
 
-	setIfNotEmpty := func(key, value string) {
-		if value != "" {
-			tags[key] = value
-		}
-	}
-	setIfNotEmpty("environment", e.environment)
-	setIfNotEmpty("release", e.release)
-	setIfNotEmpty("event_type", event.GetEventType())
-	setIfNotEmpty("resource", event.GetResourceName())
-	setIfNotEmpty("server_name", event.GetServerName())
-	setIfNotEmpty("client_name", event.GetClientName())
-	setIfNotEmpty("actor_id", event.GetIdentifyActorGivenId())
+	setTagIfNotEmpty(tags, "environment", e.environment)
+	setTagIfNotEmpty(tags, "release", e.release)
+	setTagIfNotEmpty(tags, "event_type", event.GetEventType())
+	setTagIfNotEmpty(tags, "resource", event.GetResourceName())
+	setTagIfNotEmpty(tags, "server_name", event.GetServerName())
+	setTagIfNotEmpty(tags, "client_name", event.GetClientName())
+	setTagIfNotEmpty(tags, "actor_id", event.GetIdentifyActorGivenId())
 
 	// Customer-defined tags, namespaced to avoid collisions with Sentry
 	// reserved fields.
@@ -343,17 +332,12 @@ func (e *SentryExporter) buildTags(event *core.Event) map[string]string {
 
 func (e *SentryExporter) buildExtra(event *core.Event) map[string]any {
 	extra := make(map[string]any)
-	setIfNotEmpty := func(key, value string) {
-		if value != "" {
-			extra[key] = value
-		}
-	}
-	setIfNotEmpty("session_id", event.GetSessionId())
-	setIfNotEmpty("project_id", event.GetProjectId())
-	setIfNotEmpty("user_intent", event.GetUserIntent())
-	setIfNotEmpty("actor_name", event.GetIdentifyActorName())
-	setIfNotEmpty("server_version", event.GetServerVersion())
-	setIfNotEmpty("client_version", event.GetClientVersion())
+	setIfNotEmpty(extra, "session_id", event.GetSessionId())
+	setIfNotEmpty(extra, "project_id", event.GetProjectId())
+	setIfNotEmpty(extra, "user_intent", event.GetUserIntent())
+	setIfNotEmpty(extra, "actor_name", event.GetIdentifyActorName())
+	setIfNotEmpty(extra, "server_version", event.GetServerVersion())
+	setIfNotEmpty(extra, "client_version", event.GetClientVersion())
 	if event.Duration != nil {
 		extra["duration_ms"] = *event.Duration
 	}
@@ -374,7 +358,7 @@ func (e *SentryExporter) buildContexts(event *core.Event, traceCtx sentryTraceCo
 	return contexts
 }
 
-func (e *SentryExporter) eventToErrorEvent(event *core.Event, transaction *sentryTransaction) sentryErrorEvent {
+func (e *SentryExporter) eventToErrorEvent(event *core.Event, transaction *sentryTransaction, traceID, spanID string) sentryErrorEvent {
 	errorMessage := "Unknown error"
 	errorType := "ToolCallError"
 
@@ -391,8 +375,8 @@ func (e *SentryExporter) eventToErrorEvent(event *core.Event, transaction *sentr
 
 	// Correlate with the transaction's trace context when available.
 	traceCtx := sentryTraceContext{
-		TraceID: TraceID(event.GetSessionId()),
-		SpanID:  SpanID(event.GetId()),
+		TraceID: traceID,
+		SpanID:  spanID,
 		Op:      orDefault(event.GetEventType(), "mcp.event"),
 	}
 	timestamp := eventTimestampSeconds(event)
@@ -409,20 +393,15 @@ func (e *SentryExporter) eventToErrorEvent(event *core.Event, transaction *sentr
 
 	contexts := e.buildContexts(event, traceCtx)
 	mcpCtx := make(map[string]any)
-	setIfNotEmpty := func(key, value string) {
-		if value != "" {
-			mcpCtx[key] = value
-		}
-	}
-	setIfNotEmpty("resource_name", event.GetResourceName())
-	setIfNotEmpty("session_id", event.GetSessionId())
-	setIfNotEmpty("event_type", event.GetEventType())
-	setIfNotEmpty("user_intent", event.GetUserIntent())
+	setIfNotEmpty(mcpCtx, "resource_name", event.GetResourceName())
+	setIfNotEmpty(mcpCtx, "session_id", event.GetSessionId())
+	setIfNotEmpty(mcpCtx, "event_type", event.GetEventType())
+	setIfNotEmpty(mcpCtx, "user_intent", event.GetUserIntent())
 	contexts["mcp"] = mcpCtx
 
 	return sentryErrorEvent{
 		Type:      "event",
-		EventID:   SpanID(event.GetId()) + randomHex(8),
+		EventID:   spanID + randomHex(8),
 		Timestamp: timestamp,
 		Level:     "error",
 		Exception: sentryException{

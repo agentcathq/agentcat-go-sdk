@@ -5,7 +5,6 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"sort"
 	"strconv"
 	"strings"
 	"time"
@@ -127,14 +126,8 @@ func (e *OTLPExporter) Export(event *core.Event) error {
 		return fmt.Errorf("otlp export error: %w", err)
 	}
 
-	resp, err := doPost(e.endpoint, e.headers, bytes.NewReader(body))
-	if err != nil {
+	if err := doPost(e.endpoint, e.headers, bytes.NewReader(body)); err != nil {
 		return fmt.Errorf("otlp export error: %w", err)
-	}
-	defer resp.Body.Close()
-
-	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
-		return fmt.Errorf("otlp export failed: %s", resp.Status)
 	}
 
 	e.logger.Debugf("Successfully exported event to OTLP: %s", event.GetId())
@@ -166,12 +159,7 @@ func (e *OTLPExporter) convertToSpan(event *core.Event) otlpSpan {
 	// Customer-defined tags as individual namespaced attributes (sorted for
 	// deterministic output).
 	tags := event.GetTags()
-	tagKeys := make([]string, 0, len(tags))
-	for k := range tags {
-		tagKeys = append(tagKeys, k)
-	}
-	sort.Strings(tagKeys)
-	for _, k := range tagKeys {
+	for _, k := range sortedKeys(tags) {
 		attrs = append(attrs, otlpAttribute{
 			Key:   "agentcat.tag." + k,
 			Value: otlpAttrValue{StringValue: tags[k]},

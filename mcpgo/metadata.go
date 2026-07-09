@@ -6,50 +6,20 @@ import (
 	agentcat "go.agentcat.com/sdk"
 )
 
-// resolveEventTags invokes the EventTags callback (if configured) and
-// validates the result. A panic in the callback is swallowed so the event is
-// still published without tags.
-func resolveEventTags(ctx context.Context, opts *Options, request any) (tags map[string]string) {
-	if opts == nil || opts.EventTags == nil {
-		return nil
-	}
-	defer func() {
-		if r := recover(); r != nil {
-			tags = nil
-		}
-	}()
-	return agentcat.ValidateTags(opts.EventTags(ctx, request))
-}
-
-// resolveEventProperties invokes the EventProperties callback (if configured).
-// A panic in the callback is swallowed so the event is still published
-// without properties.
-func resolveEventProperties(ctx context.Context, opts *Options, request any) (properties map[string]any) {
-	if opts == nil || opts.EventProperties == nil {
-		return nil
-	}
-	defer func() {
-		if r := recover(); r != nil {
-			properties = nil
-		}
-	}()
-	props := opts.EventProperties(ctx, request)
-	if len(props) == 0 {
-		return nil
-	}
-	return props
-}
-
-// attachEventMetadata resolves tags and properties for an event and attaches
-// them to the event's wire fields.
+// attachEventMetadata resolves customer-defined tags and properties for an
+// event via the typed Options callbacks and attaches them to the event's wire
+// fields. Panic recovery, tag validation, and empty-map dropping live in the
+// shared agentcat.AttachEventMetadata helper.
 func attachEventMetadata(ctx context.Context, opts *Options, request any, evt *agentcat.Event) {
-	if evt == nil {
-		return
+	var tags func() map[string]string
+	var properties func() map[string]any
+
+	if opts != nil && opts.EventTags != nil {
+		tags = func() map[string]string { return opts.EventTags(ctx, request) }
 	}
-	if tags := resolveEventTags(ctx, opts, request); tags != nil {
-		evt.Tags = &tags
+	if opts != nil && opts.EventProperties != nil {
+		properties = func() map[string]any { return opts.EventProperties(ctx, request) }
 	}
-	if properties := resolveEventProperties(ctx, opts, request); properties != nil {
-		evt.Properties = properties
-	}
+
+	agentcat.AttachEventMetadata(evt, tags, properties)
 }

@@ -6,7 +6,6 @@ import (
 	"errors"
 	"fmt"
 	"regexp"
-	"sort"
 	"strings"
 
 	"go.agentcat.com/sdk/internal/core"
@@ -100,24 +99,14 @@ func (e *DatadogExporter) Export(event *core.Event) error {
 
 	if body, err := json.Marshal([]datadogLog{logEntry}); err != nil {
 		errs = append(errs, fmt.Errorf("datadog logs marshal: %w", err))
-	} else if resp, err := doPost(e.logsURL, headers, bytes.NewReader(body)); err != nil {
+	} else if err := doPost(e.logsURL, headers, bytes.NewReader(body)); err != nil {
 		errs = append(errs, fmt.Errorf("datadog logs: %w", err))
-	} else {
-		resp.Body.Close()
-		if resp.StatusCode < 200 || resp.StatusCode >= 300 {
-			errs = append(errs, fmt.Errorf("datadog logs failed: %s", resp.Status))
-		}
 	}
 
 	if body, err := json.Marshal(map[string]any{"series": metrics}); err != nil {
 		errs = append(errs, fmt.Errorf("datadog metrics marshal: %w", err))
-	} else if resp, err := doPost(e.metricsURL, headers, bytes.NewReader(body)); err != nil {
+	} else if err := doPost(e.metricsURL, headers, bytes.NewReader(body)); err != nil {
 		errs = append(errs, fmt.Errorf("datadog metrics: %w", err))
-	} else {
-		resp.Body.Close()
-		if resp.StatusCode < 200 || resp.StatusCode >= 300 {
-			errs = append(errs, fmt.Errorf("datadog metrics failed: %s", resp.Status))
-		}
 	}
 
 	return errors.Join(errs...)
@@ -143,34 +132,24 @@ func (e *DatadogExporter) eventToLog(event *core.Event) datadogLog {
 	// Customer-defined tags, namespaced to avoid collisions with reserved
 	// Datadog tags (sorted for deterministic output).
 	customerTags := event.GetTags()
-	keys := make([]string, 0, len(customerTags))
-	for k := range customerTags {
-		keys = append(keys, k)
-	}
-	sort.Strings(keys)
-	for _, k := range keys {
+	for _, k := range sortedKeys(customerTags) {
 		key := datadogTagKeySanitizer.ReplaceAllString(strings.ToLower(k), "_")
 		value := strings.ReplaceAll(customerTags[k], ",", "_")
 		tags = append(tags, fmt.Sprintf("agentcat.%s:%s", key, value))
 	}
 
 	mcp := map[string]any{}
-	setIfNotEmpty := func(key, value string) {
-		if value != "" {
-			mcp[key] = value
-		}
-	}
-	setIfNotEmpty("session_id", event.GetSessionId())
-	setIfNotEmpty("event_id", event.GetId())
-	setIfNotEmpty("event_type", event.GetEventType())
-	setIfNotEmpty("resource", event.GetResourceName())
-	setIfNotEmpty("user_intent", event.GetUserIntent())
-	setIfNotEmpty("actor_id", event.GetIdentifyActorGivenId())
-	setIfNotEmpty("actor_name", event.GetIdentifyActorName())
-	setIfNotEmpty("client_name", event.GetClientName())
-	setIfNotEmpty("client_version", event.GetClientVersion())
-	setIfNotEmpty("server_name", event.GetServerName())
-	setIfNotEmpty("server_version", event.GetServerVersion())
+	setIfNotEmpty(mcp, "session_id", event.GetSessionId())
+	setIfNotEmpty(mcp, "event_id", event.GetId())
+	setIfNotEmpty(mcp, "event_type", event.GetEventType())
+	setIfNotEmpty(mcp, "resource", event.GetResourceName())
+	setIfNotEmpty(mcp, "user_intent", event.GetUserIntent())
+	setIfNotEmpty(mcp, "actor_id", event.GetIdentifyActorGivenId())
+	setIfNotEmpty(mcp, "actor_name", event.GetIdentifyActorName())
+	setIfNotEmpty(mcp, "client_name", event.GetClientName())
+	setIfNotEmpty(mcp, "client_version", event.GetClientVersion())
+	setIfNotEmpty(mcp, "server_name", event.GetServerName())
+	setIfNotEmpty(mcp, "server_version", event.GetServerVersion())
 	if event.Duration != nil {
 		mcp["duration_ms"] = *event.Duration
 	}
