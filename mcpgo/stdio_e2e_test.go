@@ -142,7 +142,7 @@ func TestStdio_IdentifyInvoked(t *testing.T) {
 	opts := &Options{
 		DisableReportMissing:   true,
 		DisableToolCallContext: true,
-		Identify: func(ctx context.Context, request *mcp.CallToolRequest) *agentcat.UserIdentity {
+		Identify: func(ctx context.Context, request any) *agentcat.UserIdentity {
 			identifyCount.Add(1)
 			return &agentcat.UserIdentity{
 				UserID:   "stdio-user-1",
@@ -171,17 +171,6 @@ func TestStdio_IdentifyInvoked(t *testing.T) {
 		t.Error("expected Identify to be called at least once over stdio transport, but it was not")
 	}
 }
-
-// TODO: restore when session state is shared across Track() calls.
-// The old TestStdio_Identify/Dedup subtest relied on a package-level session
-// map that persisted across separate Track() invocations. The session map is
-// now per-Track-invocation, so creating a new server+client pair (with a new
-// Track() call) starts a fresh session map. The stdio transport's singleton
-// session ID ("stdio") is therefore not found in the new map, and Identify
-// fires again. The HTTP dedup test (TestStreamableHTTP_IdentifyDedup) still
-// works because it reuses the same server/session map across multiple calls.
-//
-// func TestStdio_IdentifyDedup(t *testing.T) { ... }
 
 // TestStdio_ServerInfo verifies that the server name and version returned
 // during initialization match what was configured.

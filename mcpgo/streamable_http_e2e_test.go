@@ -111,7 +111,7 @@ func TestStreamableHTTP_IdentifyInvoked(t *testing.T) {
 	opts := &Options{
 		DisableReportMissing:   true,
 		DisableToolCallContext: true,
-		Identify: func(ctx context.Context, request *mcp.CallToolRequest) *agentcat.UserIdentity {
+		Identify: func(ctx context.Context, request any) *agentcat.UserIdentity {
 			identifyCount.Add(1)
 			return &agentcat.UserIdentity{
 				UserID:   "http-user-1",
@@ -142,19 +142,19 @@ func TestStreamableHTTP_IdentifyInvoked(t *testing.T) {
 }
 
 // TestStreamableHTTP_IdentifyRerun verifies that Identify is re-run on every
-// tool call (matching the TypeScript SDK): the callback fires each time, and
-// identify events are deduplicated by change detection instead.
+// captured request: the callback fires each time, and an identify event is
+// published every time it returns a non-nil identity (no dedup).
 func TestStreamableHTTP_IdentifyRerun(t *testing.T) {
 	var identifyCount atomic.Int32
 
 	opts := &Options{
 		DisableReportMissing:   true,
 		DisableToolCallContext: true,
-		Identify: func(ctx context.Context, request *mcp.CallToolRequest) *agentcat.UserIdentity {
+		Identify: func(ctx context.Context, request any) *agentcat.UserIdentity {
 			identifyCount.Add(1)
 			return &agentcat.UserIdentity{
-				UserID:   "http-dedup-user",
-				UserName: "Dedup User",
+				UserID:   "http-rerun-user",
+				UserName: "Rerun User",
 			}
 		},
 	}
@@ -181,8 +181,8 @@ func TestStreamableHTTP_IdentifyRerun(t *testing.T) {
 		t.Fatal("expected Identify to be called after first tool call, but it was not")
 	}
 
-	// Second call: Identify runs again on every tool call so identity
-	// changes can be detected (the identify event is only published on change).
+	// Second call: Identify runs again on every captured request; an identify
+	// event is published each time it returns a non-nil identity.
 	req2 := mcp.CallToolRequest{}
 	req2.Params.Name = "list_todos"
 	req2.Params.Arguments = map[string]any{}
@@ -263,16 +263,21 @@ func TestStreamableHTTP_ServerInfo(t *testing.T) {
 	}
 }
 
-// TestStreamableHTTP_ConcurrentIdentifyDedup verifies that when multiple
-// concurrent tool calls arrive on the same session, Identify fires exactly
-// once and no data races occur. Run with -race to verify.
-func TestStreamableHTTP_ConcurrentIdentifyDedup(t *testing.T) {
+// TestStreamableHTTP_ConcurrentIdentifyNoRace verifies that when concurrent
+// tool calls arrive from multiple sessions, Identify fires once per tool call
+// and no data races occur. Run with -race to verify.
+func TestStreamableHTTP_ConcurrentIdentifyNoRace(t *testing.T) {
 	var identifyCount atomic.Int32
 
 	opts := &Options{
 		DisableReportMissing:   true,
 		DisableToolCallContext: true,
-		Identify: func(ctx context.Context, request *mcp.CallToolRequest) *agentcat.UserIdentity {
+		Identify: func(ctx context.Context, request any) *agentcat.UserIdentity {
+			// Gate to tool calls so the count below stays deterministic
+			// (identify also runs for initialize and other captured methods).
+			if _, ok := request.(*mcp.CallToolRequest); !ok {
+				return nil
+			}
 			identifyCount.Add(1)
 			return &agentcat.UserIdentity{
 				UserID:   "concurrent-user",
@@ -367,10 +372,11 @@ func TestStreamableHTTP_ConcurrentIdentifyDedup(t *testing.T) {
 
 	wg.Wait()
 
-	// Each client has its own session, so Identify should fire once per session.
-	// The key assertion is that the race detector does NOT fire.
+	// Each client makes exactly one tool call, so the gated callback returns
+	// an identity exactly numClients times. The key assertion is that the
+	// race detector does NOT fire.
 	count := identifyCount.Load()
 	if count != int32(numClients) {
-		t.Errorf("expected Identify to be called %d times (once per session), got %d", numClients, count)
+		t.Errorf("expected Identify to be called %d times (once per tool call), got %d", numClients, count)
 	}
 }

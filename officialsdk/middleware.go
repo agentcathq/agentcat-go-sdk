@@ -167,7 +167,6 @@ func captureEvent(
 	// defer (before the user-callback section below) so a panic can never
 	// leave the session mutex held.
 	var evt *agentcat.Event
-	var toolReq *mcp.CallToolRequest
 	func() {
 		ps.Mu.Lock()
 		defer ps.Mu.Unlock()
@@ -245,22 +244,18 @@ func captureEvent(
 			}
 		}
 
-		// Determine whether identify should run for this request while holding
-		// the lock, but release the lock before calling the user's Identify
-		// callback (which may be slow or block).
-		if method == "tools/call" && opts != nil && opts.Identify != nil {
-			toolReq, _ = req.(*mcp.CallToolRequest)
-		}
 	}()
 
 	if evt == nil {
 		return
 	}
 
-	// Identify runs on every tool call; an identify event is published only
-	// when the identity changes (UserID/UserName overwritten, UserData merged).
-	if toolReq != nil {
-		handleIdentify(ctx, opts, toolReq, ps, evt, publishFn)
+	// Identify runs on every captured event (all MCP methods), outside the
+	// session lock (the user callback may be slow or block). An
+	// agentcat:identify event is published every time the callback returns a
+	// non-nil identity.
+	if opts != nil && opts.Identify != nil {
+		handleIdentify(ctx, opts, req, ps, evt, publishFn)
 	}
 
 	// Attach customer-defined tags and properties.
@@ -269,26 +264,26 @@ func captureEvent(
 	publishFn(evt)
 }
 
-// handleIdentify runs the Identify callback for a tool call, compares the
-// result against the session's current identity, and publishes an identify
-// event only when the identity changed. The merged identity is also copied
-// onto the in-flight event. A panic in the callback is swallowed.
+// handleIdentify runs the Identify callback for a captured request and, when
+// it returns a non-nil identity, merges it into the session identity and
+// publishes an agentcat:identify event. UserID and UserName are overwritten;
+// UserData is merged. The merged identity is also copied onto the in-flight
+// event. A panic in the callback is swallowed.
 func handleIdentify(
 	ctx context.Context,
 	opts *Options,
-	toolReq *mcp.CallToolRequest,
+	req mcp.Request,
 	ps *agentcat.ProtectedSession,
 	evt *agentcat.Event,
 	publishFn func(*agentcat.Event),
 ) {
-	identifyInfo := safeIdentify(ctx, opts, toolReq)
+	identifyInfo := safeIdentify(ctx, opts, req)
 	if identifyInfo == nil {
 		return
 	}
 
-	// Merge and compare under lock; the lock is released via defer so a panic
-	// (e.g. a user MarshalJSON inside IdentitiesEqual) can never leave the
-	// session mutex held.
+	// Merge and stamp under lock; the lock is released via defer so a panic
+	// can never leave the session mutex held.
 	var merged *agentcat.UserIdentity
 	var identifyEvent *agentcat.Event
 	func() {
@@ -296,16 +291,13 @@ func handleIdentify(
 		defer ps.Mu.Unlock()
 
 		merged = agentcat.MergeIdentities(ps.Identity, identifyInfo)
-		changed := ps.Identity == nil || !agentcat.IdentitiesEqual(ps.Identity, merged)
 		ps.Identity = merged
 
 		ps.Sess.IdentifyActorGivenId = &merged.UserID
 		ps.Sess.IdentifyActorName = &merged.UserName
 		ps.Sess.IdentifyData = merged.UserData
 
-		if changed {
-			identifyEvent = agentcat.CreateIdentifyEvent(ps.Sess)
-		}
+		identifyEvent = agentcat.CreateIdentifyEvent(ps.Sess)
 	}()
 
 	// Copy the merged identity onto the in-flight event.
@@ -320,11 +312,11 @@ func handleIdentify(
 
 // safeIdentify invokes the user-supplied Identify callback with panic
 // recovery so a faulty callback can never break the customer's server.
-func safeIdentify(ctx context.Context, opts *Options, toolReq *mcp.CallToolRequest) (identity *agentcat.UserIdentity) {
+func safeIdentify(ctx context.Context, opts *Options, req mcp.Request) (identity *agentcat.UserIdentity) {
 	defer func() {
 		if r := recover(); r != nil {
 			identity = nil
 		}
 	}()
-	return opts.Identify(ctx, toolReq)
+	return opts.Identify(ctx, req)
 }

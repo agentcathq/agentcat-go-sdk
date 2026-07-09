@@ -64,7 +64,6 @@ func captureSessionFromContext(
 
 	// Update session fields under lock; the lock is released via defer so a
 	// panic can never leave the session mutex held.
-	var toolReq *mcp.CallToolRequest
 	func() {
 		ps.Mu.Lock()
 		defer ps.Mu.Unlock()
@@ -103,54 +102,51 @@ func captureSessionFromContext(
 			}
 		}
 
-		if opts != nil && opts.Identify != nil {
-			toolReq, _ = request.(*mcp.CallToolRequest)
-		}
 	}()
 
-	if toolReq != nil {
-		handleIdentify(ctx, opts, toolReq, ps, publishFn)
+	// Identify runs on every captured event, outside the session lock (the
+	// user callback may be slow or block). mcp-go's hook dispatch fires
+	// exactly one of OnSuccess/OnError per request, so identify runs once per
+	// captured request.
+	if opts != nil && opts.Identify != nil {
+		handleIdentify(ctx, opts, request, ps, publishFn)
 	}
 
 	ps.Touch()
 	return ps
 }
 
-// handleIdentify runs the Identify callback for a tool call, compares the
-// result against the session's current identity, and publishes an identify
-// event only when the identity changed. UserID and UserName are overwritten;
+// handleIdentify runs the Identify callback for a captured request and, when
+// it returns a non-nil identity, merges it into the session identity and
+// publishes an agentcat:identify event. UserID and UserName are overwritten;
 // UserData is merged. A panic in the callback is swallowed.
 func handleIdentify(
 	ctx context.Context,
 	opts *Options,
-	toolReq *mcp.CallToolRequest,
+	request any,
 	ps *agentcat.ProtectedSession,
 	publishFn func(*agentcat.Event),
 ) {
-	identifyInfo := safeIdentify(ctx, opts, toolReq)
+	identifyInfo := safeIdentify(ctx, opts, request)
 	if identifyInfo == nil {
 		return
 	}
 
-	// Merge and compare under lock; the lock is released via defer so a panic
-	// (e.g. a user MarshalJSON inside IdentitiesEqual) can never leave the
-	// session mutex held.
+	// Merge and stamp under lock; the lock is released via defer so a panic
+	// can never leave the session mutex held.
 	var identifyEvent *agentcat.Event
 	func() {
 		ps.Mu.Lock()
 		defer ps.Mu.Unlock()
 
 		merged := agentcat.MergeIdentities(ps.Identity, identifyInfo)
-		changed := ps.Identity == nil || !agentcat.IdentitiesEqual(ps.Identity, merged)
 		ps.Identity = merged
 
 		ps.Sess.IdentifyActorGivenId = &merged.UserID
 		ps.Sess.IdentifyActorName = &merged.UserName
 		ps.Sess.IdentifyData = merged.UserData
 
-		if changed {
-			identifyEvent = agentcat.CreateIdentifyEvent(ps.Sess)
-		}
+		identifyEvent = agentcat.CreateIdentifyEvent(ps.Sess)
 	}()
 
 	if identifyEvent != nil {
@@ -160,11 +156,11 @@ func handleIdentify(
 
 // safeIdentify invokes the user-supplied Identify callback with panic
 // recovery so a faulty callback can never break the customer's server.
-func safeIdentify(ctx context.Context, opts *Options, toolReq *mcp.CallToolRequest) (identity *agentcat.UserIdentity) {
+func safeIdentify(ctx context.Context, opts *Options, request any) (identity *agentcat.UserIdentity) {
 	defer func() {
 		if r := recover(); r != nil {
 			identity = nil
 		}
 	}()
-	return opts.Identify(ctx, toolReq)
+	return opts.Identify(ctx, request)
 }

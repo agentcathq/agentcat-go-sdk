@@ -2,7 +2,9 @@ package mcpgo
 
 import (
 	"context"
+	"fmt"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -368,20 +370,25 @@ func TestDeterministicSessionID_DerivedFromTransportSession(t *testing.T) {
 	}
 }
 
-// --- G11: Identify re-run + change detection ---
+// --- G11: Identify re-run + publish-every-time ---
 
-func TestIdentify_PublishesOnlyOnChange(t *testing.T) {
+func TestIdentify_PublishesEveryTime(t *testing.T) {
 	identities := []*agentcat.UserIdentity{
 		{UserID: "u1", UserName: "Alice", UserData: map[string]any{"plan": "free"}},
-		{UserID: "u1", UserName: "Alice", UserData: map[string]any{"plan": "free"}}, // unchanged
-		{UserID: "u1", UserName: "Alice", UserData: map[string]any{"plan": "pro"}},  // changed
+		{UserID: "u1", UserName: "Alice", UserData: map[string]any{"plan": "free"}}, // identical to first
+		{UserID: "u1", UserName: "Alice", UserData: map[string]any{"plan": "pro"}},
 	}
 	var call int
 
 	opts := &Options{
 		DisableReportMissing:   true,
 		DisableToolCallContext: true,
-		Identify: func(ctx context.Context, request *mcp.CallToolRequest) *agentcat.UserIdentity {
+		Identify: func(ctx context.Context, request any) *agentcat.UserIdentity {
+			// Gate to tool calls so the identify-event count is driven only
+			// by the three callAddTodo calls below.
+			if _, ok := request.(*mcp.CallToolRequest); !ok {
+				return nil
+			}
 			identity := identities[call%len(identities)]
 			call++
 			return identity
@@ -394,7 +401,7 @@ func TestIdentify_PublishesOnlyOnChange(t *testing.T) {
 	callAddTodo(t, mcpClient, "second")
 	callAddTodo(t, mcpClient, "third")
 
-	events := mock.waitForEvents(5, 3*time.Second)
+	events := mock.waitForEvents(7, 3*time.Second)
 
 	var identifyEvents []*agentcat.Event
 	for _, evt := range events {
@@ -403,14 +410,20 @@ func TestIdentify_PublishesOnlyOnChange(t *testing.T) {
 		}
 	}
 
-	if len(identifyEvents) != 2 {
-		t.Fatalf("expected 2 identify events (initial + change), got %d", len(identifyEvents))
+	if len(identifyEvents) != 3 {
+		t.Fatalf("expected 3 identify events (one per identify call, no dedup), got %d", len(identifyEvents))
 	}
 
-	// The second identify event must carry the merged (changed) identity.
-	second := identifyEvents[1]
-	if second.IdentifyData["plan"] != "pro" {
-		t.Errorf("changed identify event plan = %v, want pro", second.IdentifyData["plan"])
+	// The first two identify events carry the identical identity — proving
+	// unchanged identities are still published (no change-detection dedup).
+	if identifyEvents[0].IdentifyData["plan"] != "free" {
+		t.Errorf("first identify event plan = %v, want free", identifyEvents[0].IdentifyData["plan"])
+	}
+	if identifyEvents[1].IdentifyData["plan"] != "free" {
+		t.Errorf("second identify event plan = %v, want free", identifyEvents[1].IdentifyData["plan"])
+	}
+	if identifyEvents[2].IdentifyData["plan"] != "pro" {
+		t.Errorf("third identify event plan = %v, want pro", identifyEvents[2].IdentifyData["plan"])
 	}
 }
 
@@ -424,7 +437,11 @@ func TestIdentify_MergesUserData(t *testing.T) {
 	opts := &Options{
 		DisableReportMissing:   true,
 		DisableToolCallContext: true,
-		Identify: func(ctx context.Context, request *mcp.CallToolRequest) *agentcat.UserIdentity {
+		Identify: func(ctx context.Context, request any) *agentcat.UserIdentity {
+			// Gate to tool calls so exactly two identify events are published.
+			if _, ok := request.(*mcp.CallToolRequest); !ok {
+				return nil
+			}
 			identity := identities[call%len(identities)]
 			call++
 			return identity
@@ -436,7 +453,7 @@ func TestIdentify_MergesUserData(t *testing.T) {
 	callAddTodo(t, mcpClient, "first")
 	callAddTodo(t, mcpClient, "second")
 
-	events := mock.waitForEvents(4, 3*time.Second)
+	events := mock.waitForEvents(5, 3*time.Second)
 
 	var identifyEvents []*agentcat.Event
 	for _, evt := range events {
@@ -464,7 +481,7 @@ func TestIdentify_PanicIsSwallowed(t *testing.T) {
 	opts := &Options{
 		DisableReportMissing:   true,
 		DisableToolCallContext: true,
-		Identify: func(ctx context.Context, request *mcp.CallToolRequest) *agentcat.UserIdentity {
+		Identify: func(ctx context.Context, request any) *agentcat.UserIdentity {
 			panic("customer identify bug")
 		},
 	}
@@ -478,5 +495,64 @@ func TestIdentify_PanicIsSwallowed(t *testing.T) {
 	}
 	if evt := findEventByType(events, "agentcat:identify"); evt != nil {
 		t.Error("no identify event should be published when Identify panics")
+	}
+}
+
+// TestIdentify_RunsOnEveryMethod verifies the Identify hook runs for every
+// auto-captured MCP method (not just tools/call) and that an identify event
+// is published for each captured event when the callback returns an identity.
+func TestIdentify_RunsOnEveryMethod(t *testing.T) {
+	var mu sync.Mutex
+	seenTypes := make(map[string]bool)
+
+	opts := &Options{
+		DisableReportMissing:   true,
+		DisableToolCallContext: true,
+		Identify: func(ctx context.Context, request any) *agentcat.UserIdentity {
+			mu.Lock()
+			seenTypes[fmt.Sprintf("%T", request)] = true
+			mu.Unlock()
+			return &agentcat.UserIdentity{UserID: "u-every", UserName: "Every Method"}
+		},
+	}
+
+	mcpClient, mock := setupSpyHTTP(t, opts) // performs initialize
+
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+
+	if _, err := mcpClient.ListTools(ctx, mcp.ListToolsRequest{}); err != nil {
+		t.Fatalf("ListTools failed: %v", err)
+	}
+	callAddTodo(t, mcpClient, "every method")
+
+	// initialize + tools/list + tools/call, each paired with an identify event.
+	events := mock.waitForEvents(6, 3*time.Second)
+
+	mu.Lock()
+	for _, want := range []string{"*mcp.InitializeRequest", "*mcp.ListToolsRequest", "*mcp.CallToolRequest"} {
+		if !seenTypes[want] {
+			t.Errorf("Identify was not invoked with request type %s (saw %v)", want, seenTypes)
+		}
+	}
+	mu.Unlock()
+
+	var identifyCount, mcpCount int
+	for _, evt := range events {
+		if evt.EventType == nil {
+			continue
+		}
+		switch {
+		case *evt.EventType == "agentcat:identify":
+			identifyCount++
+		case strings.HasPrefix(*evt.EventType, "mcp:"):
+			mcpCount++
+		}
+	}
+	if mcpCount == 0 {
+		t.Fatal("expected captured mcp:* events")
+	}
+	if identifyCount != mcpCount {
+		t.Errorf("expected one identify event per captured mcp event: identify=%d, mcp=%d", identifyCount, mcpCount)
 	}
 }

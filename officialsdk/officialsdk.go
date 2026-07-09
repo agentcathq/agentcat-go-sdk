@@ -52,11 +52,14 @@ type Options struct {
 	// Debug enables debug logging to ~/agentcat.log. When false, no logging occurs.
 	Debug bool
 
-	// Identify is called on every tool call to identify the actor. The result
-	// is compared against the session's current identity; an identify event is
-	// published only when the identity changes (UserID/UserName are
-	// overwritten, UserData is merged). Return nil to skip identification.
-	Identify func(ctx context.Context, request *mcp.CallToolRequest) *UserIdentity
+	// Identify is called on every auto-captured event to identify the actor —
+	// including initialize and notifications, not just tool calls. Type-assert
+	// the request for tool calls (e.g. request.(*mcp.CallToolRequest)). Every
+	// time a non-nil identity is returned, an agentcat:identify event is
+	// published and the session identity is updated: UserID and UserName are
+	// overwritten while UserData merges across calls. Return nil to skip
+	// identification for a request.
+	Identify func(ctx context.Context, request mcp.Request) *UserIdentity
 
 	// EventTags is called on every auto-captured event to attach string
 	// key-value tags. It receives the MCP request that triggered the event.

@@ -81,8 +81,12 @@ func main() {
 		// Write debug logs to ~/mcpcat.log.
 		Debug: true,
 
-		// Identify the actor on first tool call.
-		Identify: func(ctx context.Context, req *mcp.CallToolRequest) *agentcat.UserIdentity {
+		// Identify the actor. The callback runs on every auto-captured event;
+		// type-assert the request to identify on tool calls only.
+		Identify: func(ctx context.Context, request mcp.Request) *agentcat.UserIdentity {
+			if _, ok := request.(*mcp.CallToolRequest); !ok {
+				return nil // skip non-tool-call events
+			}
 			// In a real server you would extract identity from ctx, headers,
 			// or an auth token. Here we return a hard-coded example.
 			return &agentcat.UserIdentity{

@@ -102,11 +102,6 @@ func ValidateTags(tags map[string]string) map[string]string {
 	return validation.ValidateTags(tags)
 }
 
-// IdentitiesEqual reports whether two user identities are deeply equal.
-func IdentitiesEqual(a, b *UserIdentity) bool {
-	return core.IdentitiesEqual(a, b)
-}
-
 // MergeIdentities merges a new identity into a previous one: UserID and
 // UserName are overwritten while UserData fields are merged (next wins).
 func MergeIdentities(previous, next *UserIdentity) *UserIdentity {

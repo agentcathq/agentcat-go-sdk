@@ -8,7 +8,6 @@ import (
 	"context"
 	"sync"
 
-	"github.com/mark3labs/mcp-go/mcp"
 	"github.com/mark3labs/mcp-go/server"
 	agentcat "go.agentcat.com/sdk"
 )
@@ -54,11 +53,15 @@ type Options struct {
 	// Debug enables debug logging to ~/agentcat.log. When false, no logging occurs.
 	Debug bool
 
-	// Identify is called on every tool call to identify the actor. The result
-	// is compared against the session's current identity; an identify event is
-	// published only when the identity changes (UserID/UserName are
-	// overwritten, UserData is merged). Return nil to skip identification.
-	Identify func(ctx context.Context, request *mcp.CallToolRequest) *UserIdentity
+	// Identify is called on every auto-captured event to identify the actor.
+	// The request argument is the typed MCP request that triggered the event
+	// (e.g. *mcp.CallToolRequest for tool calls, *mcp.InitializeRequest for
+	// initialize). Every time a non-nil identity is returned, an
+	// agentcat:identify event is published and the session identity is updated:
+	// UserID and UserName are overwritten while UserData merges across calls.
+	// Return nil to skip identification for a request (e.g. type-assert
+	// *mcp.CallToolRequest and return nil for everything else).
+	Identify func(ctx context.Context, request any) *UserIdentity
 
 	// EventTags is called on every auto-captured event to attach string
 	// key-value tags. The request argument is the typed MCP request that

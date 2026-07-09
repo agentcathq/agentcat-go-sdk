@@ -2,7 +2,9 @@ package officialsdk
 
 import (
 	"context"
+	"fmt"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -298,20 +300,25 @@ func TestDeterministicSessionID_DerivedFromTransportSession(t *testing.T) {
 	}
 }
 
-// --- G11: Identify re-run + change detection ---
+// --- G11: Identify re-run + publish-every-time ---
 
-func TestIdentify_PublishesOnlyOnChange(t *testing.T) {
+func TestIdentify_PublishesEveryTime(t *testing.T) {
 	identities := []*agentcat.UserIdentity{
 		{UserID: "u1", UserName: "Alice", UserData: map[string]any{"plan": "free"}},
-		{UserID: "u1", UserName: "Alice", UserData: map[string]any{"plan": "free"}}, // unchanged
-		{UserID: "u1", UserName: "Alice", UserData: map[string]any{"plan": "pro"}},  // changed
+		{UserID: "u1", UserName: "Alice", UserData: map[string]any{"plan": "free"}}, // identical to first
+		{UserID: "u1", UserName: "Alice", UserData: map[string]any{"plan": "pro"}},
 	}
 	var call int
 
 	opts := DefaultOptions()
 	opts.DisableReportMissing = true
 	opts.DisableToolCallContext = true
-	opts.Identify = func(ctx context.Context, request *mcp.CallToolRequest) *agentcat.UserIdentity {
+	opts.Identify = func(ctx context.Context, request mcp.Request) *agentcat.UserIdentity {
+		// Gate to tool calls so the identify-event count is driven only by
+		// the three CallTool calls below.
+		if _, ok := request.(*mcp.CallToolRequest); !ok {
+			return nil
+		}
 		identity := identities[call%len(identities)]
 		call++
 		return identity
@@ -334,13 +341,20 @@ func TestIdentify_PublishesOnlyOnChange(t *testing.T) {
 
 	identifyEvents := filterEvents(mock.getEvents(), "agentcat:identify")
 
-	if len(identifyEvents) != 2 {
-		t.Fatalf("expected 2 identify events (initial + change), got %d", len(identifyEvents))
+	if len(identifyEvents) != 3 {
+		t.Fatalf("expected 3 identify events (one per identify call, no dedup), got %d", len(identifyEvents))
 	}
 
-	second := identifyEvents[1]
-	if second.IdentifyData["plan"] != "pro" {
-		t.Errorf("changed identify event plan = %v, want pro", second.IdentifyData["plan"])
+	// The first two identify events carry the identical identity — proving
+	// unchanged identities are still published (no change-detection dedup).
+	if identifyEvents[0].IdentifyData["plan"] != "free" {
+		t.Errorf("first identify event plan = %v, want free", identifyEvents[0].IdentifyData["plan"])
+	}
+	if identifyEvents[1].IdentifyData["plan"] != "free" {
+		t.Errorf("second identify event plan = %v, want free", identifyEvents[1].IdentifyData["plan"])
+	}
+	if identifyEvents[2].IdentifyData["plan"] != "pro" {
+		t.Errorf("third identify event plan = %v, want pro", identifyEvents[2].IdentifyData["plan"])
 	}
 }
 
@@ -354,7 +368,11 @@ func TestIdentify_MergesUserData(t *testing.T) {
 	opts := DefaultOptions()
 	opts.DisableReportMissing = true
 	opts.DisableToolCallContext = true
-	opts.Identify = func(ctx context.Context, request *mcp.CallToolRequest) *agentcat.UserIdentity {
+	opts.Identify = func(ctx context.Context, request mcp.Request) *agentcat.UserIdentity {
+		// Gate to tool calls so exactly two identify events are published.
+		if _, ok := request.(*mcp.CallToolRequest); !ok {
+			return nil
+		}
 		identity := identities[call%len(identities)]
 		call++
 		return identity
@@ -394,7 +412,7 @@ func TestIdentify_PanicIsSwallowed(t *testing.T) {
 	opts := DefaultOptions()
 	opts.DisableReportMissing = true
 	opts.DisableToolCallContext = true
-	opts.Identify = func(ctx context.Context, request *mcp.CallToolRequest) *agentcat.UserIdentity {
+	opts.Identify = func(ctx context.Context, request mcp.Request) *agentcat.UserIdentity {
 		panic("customer identify bug")
 	}
 
@@ -413,5 +431,85 @@ func TestIdentify_PanicIsSwallowed(t *testing.T) {
 	}
 	if len(filterEvents(mock.getEvents(), "agentcat:identify")) != 0 {
 		t.Error("no identify event should be published when Identify panics")
+	}
+}
+
+// TestIdentify_RunsOnEveryMethod verifies the Identify hook runs for every
+// auto-captured MCP method (initialize, notifications, tools/list, tools/call)
+// and that an identify event is published for each captured event when the
+// callback returns an identity.
+func TestIdentify_RunsOnEveryMethod(t *testing.T) {
+	var mu sync.Mutex
+	seenTypes := make(map[string]bool)
+
+	opts := DefaultOptions()
+	opts.DisableReportMissing = true
+	opts.DisableToolCallContext = true
+	opts.Identify = func(ctx context.Context, request mcp.Request) *agentcat.UserIdentity {
+		// The go-sdk request types are aliases of generic instantiations
+		// (e.g. CallToolRequest = ServerRequest[*CallToolParamsRaw]), so
+		// classify via type assertions rather than %T strings. There is no
+		// named alias for the server-side initialize request.
+		var kind string
+		switch request.(type) {
+		case *mcp.CallToolRequest:
+			kind = "tools/call"
+		case *mcp.ListToolsRequest:
+			kind = "tools/list"
+		case *mcp.ServerRequest[*mcp.InitializeParams]:
+			kind = "initialize"
+		default:
+			kind = fmt.Sprintf("%T", request)
+		}
+		mu.Lock()
+		seenTypes[kind] = true
+		mu.Unlock()
+		return &agentcat.UserIdentity{UserID: "u-every", UserName: "Every Method"}
+	}
+
+	clientSession, _, mock := setupStreamableHTTP(t, opts) // performs initialize
+	ctx := context.Background()
+
+	if _, err := clientSession.ListTools(ctx, &mcp.ListToolsParams{}); err != nil {
+		t.Fatalf("ListTools error: %v", err)
+	}
+	if _, err := clientSession.CallTool(ctx, &mcp.CallToolParams{
+		Name:      "add_todo",
+		Arguments: map[string]any{"title": "every method"},
+	}); err != nil {
+		t.Fatalf("CallTool error: %v", err)
+	}
+
+	// initialize + notifications/initialized + tools/list + tools/call, each
+	// paired with an identify event.
+	events := mock.waitForEvents(8, 3*time.Second)
+
+	// Loose set assertion: at least these request kinds must have been seen
+	// (the initialized notification also fires, with its own request type).
+	mu.Lock()
+	for _, want := range []string{"initialize", "tools/list", "tools/call"} {
+		if !seenTypes[want] {
+			t.Errorf("Identify was not invoked for %s (saw %v)", want, seenTypes)
+		}
+	}
+	mu.Unlock()
+
+	var identifyCount, mcpCount int
+	for _, evt := range events {
+		if evt.EventType == nil {
+			continue
+		}
+		switch {
+		case *evt.EventType == "agentcat:identify":
+			identifyCount++
+		case strings.HasPrefix(*evt.EventType, "mcp:"):
+			mcpCount++
+		}
+	}
+	if mcpCount == 0 {
+		t.Fatal("expected captured mcp:* events")
+	}
+	if identifyCount != mcpCount {
+		t.Errorf("expected one identify event per captured mcp event: identify=%d, mcp=%d", identifyCount, mcpCount)
 	}
 }

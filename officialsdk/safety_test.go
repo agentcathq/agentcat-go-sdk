@@ -69,7 +69,7 @@ func TestConcurrentIdentifyChanges_NoRace(t *testing.T) {
 	opts := DefaultOptions()
 	opts.DisableReportMissing = true
 	opts.DisableToolCallContext = true
-	opts.Identify = func(ctx context.Context, request *mcp.CallToolRequest) *UserIdentity {
+	opts.Identify = func(ctx context.Context, request mcp.Request) *UserIdentity {
 		i := n.Add(1)
 		return &UserIdentity{
 			UserID:   fmt.Sprintf("user-%d", i%4),

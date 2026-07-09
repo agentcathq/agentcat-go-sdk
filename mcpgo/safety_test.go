@@ -144,7 +144,7 @@ func TestConcurrentIdentifyChanges_NoRace(t *testing.T) {
 	opts := DefaultOptions()
 	opts.DisableReportMissing = true
 	opts.DisableToolCallContext = true
-	opts.Identify = func(ctx context.Context, request *mcp.CallToolRequest) *UserIdentity {
+	opts.Identify = func(ctx context.Context, request any) *UserIdentity {
 		i := n.Add(1)
 		return &UserIdentity{
 			UserID:   fmt.Sprintf("user-%d", i%4),
@@ -169,15 +169,18 @@ func TestConcurrentIdentifyChanges_NoRace(t *testing.T) {
 	}
 	wg.Wait()
 
-	events := mock.waitForEvents(workers*callsPerWorker, 5*time.Second)
+	// Every call returns a non-nil identity, so every tool call publishes an
+	// identify event alongside its tools/call event (no dedup).
+	events := mock.waitForEvents(2*workers*callsPerWorker, 5*time.Second)
 	var identifies int
 	for _, evt := range events {
 		if evt.EventType != nil && *evt.EventType == "agentcat:identify" {
 			identifies++
 		}
 	}
-	if identifies == 0 {
-		t.Error("expected at least one identify event from changing identities")
+	if identifies < workers*callsPerWorker {
+		t.Errorf("expected at least %d identify events (one per tool call), got %d",
+			workers*callsPerWorker, identifies)
 	}
 }
 

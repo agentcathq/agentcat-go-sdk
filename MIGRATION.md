@@ -24,7 +24,33 @@ If you never touch your integration, nothing stops working. Migrate on your own 
 | Generated API client     | `github.com/mcpcat/mcpcat-go-api`               | `go.agentcat.com/api`                |
 | GitHub repo              | `github.com/MCPCat/mcpcat-go-sdk`               | `github.com/agentcathq/agentcat-go-sdk` |
 
-The adapter packages are still named `mcpgo` and `officialsdk`; only their import paths changed. The public API is unchanged — `Track()`, `Options`, `UserIdentity`, the `Identify` and redaction hooks, and the shutdown function all work exactly as before.
+The adapter packages are still named `mcpgo` and `officialsdk`; only their import paths changed. `Track()`, `Options`, `UserIdentity`, the redaction hook, and the shutdown function are unchanged.
+
+The `Identify` callback now runs on every auto-captured event (not just tool calls) and receives the MCP request that triggered the event, so its signature is wider:
+
+```diff
+  // mcpgo
+- Identify: func(ctx context.Context, req *mcp.CallToolRequest) *agentcat.UserIdentity {
++ Identify: func(ctx context.Context, request any) *agentcat.UserIdentity {
++     req, ok := request.(*mcp.CallToolRequest)
++     if !ok {
++         return nil // identify on tool calls only
++     }
+      ...
+  }
+
+  // officialsdk
+- Identify: func(ctx context.Context, req *mcp.CallToolRequest) *agentcat.UserIdentity {
++ Identify: func(ctx context.Context, request mcp.Request) *agentcat.UserIdentity {
++     req, ok := request.(*mcp.CallToolRequest)
++     if !ok {
++         return nil // identify on tool calls only
++     }
+      ...
+  }
+```
+
+An `agentcat:identify` event is published every time the callback returns a non-nil identity (`UserID`/`UserName` are overwritten, `UserData` merges across calls); return `nil` to skip a request.
 
 **New defaults in `go.agentcat.com/sdk` (the old names still work where noted):**
 
@@ -93,6 +119,6 @@ Migrate this project from the Go module `github.com/mcpcat/mcpcat-go-sdk` to its
 
 **Will my data/history split?** No. Both SDKs report into the same platform and your history stays unified under your project.
 
-**Does `Track()` or any option behave differently?** The API surface is the same — `Track()`, `Options`, `UserIdentity`, and the hooks all work as before. Defaults were rebranded: events go to `api.agentcat.com` (the old endpoint still works via override), debug logs go to `~/agentcat.log`, and identify events are published as `agentcat:identify`. The new SDK also adds telemetry exporters (`otlp`, `datadog`, `sentry`, `posthog`) and a telemetry-only mode — see the README.
+**Does `Track()` or any option behave differently?** `Track()`, `Options`, `UserIdentity`, and the redaction hook work as before. The `Identify` callback now runs on every auto-captured event and takes the triggering request (`request any` in mcpgo, `request mcp.Request` in officialsdk) — type-assert `*mcp.CallToolRequest` and return `nil` for other requests to keep the old tool-call-only behavior (see "What changed" above). Defaults were rebranded: events go to `api.agentcat.com` (the old endpoint still works via override), debug logs go to `~/agentcat.log`, and identify events are published as `agentcat:identify`. The new SDK also adds telemetry exporters (`otlp`, `datadog`, `sentry`, `posthog`) and a telemetry-only mode — see the README.
 
 **Questions?** Open an issue or email [hi@agentcat.com](mailto:hi@agentcat.com).

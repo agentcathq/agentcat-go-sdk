@@ -176,7 +176,7 @@ func TestStdio_ErrorToolCall(t *testing.T) {
 func TestStdio_IdentifyInvoked(t *testing.T) {
 	identifyCalled := false
 	opts := DefaultOptions()
-	opts.Identify = func(ctx context.Context, request *mcp.CallToolRequest) *agentcat.UserIdentity {
+	opts.Identify = func(ctx context.Context, request mcp.Request) *agentcat.UserIdentity {
 		identifyCalled = true
 		return &agentcat.UserIdentity{
 			UserID:   "user_456",

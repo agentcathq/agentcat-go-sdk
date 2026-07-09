@@ -334,7 +334,12 @@ func TestMiddleware_CapturesInitializeEvent(t *testing.T) {
 func TestMiddleware_WithIdentify(t *testing.T) {
 	identifyCalled := false
 	opts := DefaultOptions()
-	opts.Identify = func(ctx context.Context, request *mcp.CallToolRequest) *agentcat.UserIdentity {
+	opts.Identify = func(ctx context.Context, request mcp.Request) *agentcat.UserIdentity {
+		// Gate to tool calls so initialize/notification captures do not emit
+		// identify events (waitForEvents below counts on exactly one).
+		if _, ok := request.(*mcp.CallToolRequest); !ok {
+			return nil
+		}
 		identifyCalled = true
 		return &agentcat.UserIdentity{
 			UserID:   "user_123",
@@ -386,14 +391,19 @@ func TestMiddleware_WithIdentify(t *testing.T) {
 	}
 }
 
-// TestMiddleware_IdentifyRerunsWithEventDedup verifies the identify callback
-// re-runs on every tool call (matching the TypeScript SDK) while the
-// agentcat:identify event is published only when the identity changes.
-func TestMiddleware_IdentifyRerunsWithEventDedup(t *testing.T) {
+// TestMiddleware_IdentifyPublishesEveryTime verifies the identify callback
+// re-runs on every tool call and an agentcat:identify event is published every
+// time it returns a non-nil identity — even when the identity is unchanged.
+func TestMiddleware_IdentifyPublishesEveryTime(t *testing.T) {
 	identifyCount := 0
 	var mu sync.Mutex
 	opts := DefaultOptions()
-	opts.Identify = func(ctx context.Context, request *mcp.CallToolRequest) *agentcat.UserIdentity {
+	opts.Identify = func(ctx context.Context, request mcp.Request) *agentcat.UserIdentity {
+		// Count and identify only tool calls so the expected event counts
+		// below stay deterministic.
+		if _, ok := request.(*mcp.CallToolRequest); !ok {
+			return nil
+		}
 		mu.Lock()
 		identifyCount++
 		mu.Unlock()
@@ -436,21 +446,21 @@ func TestMiddleware_IdentifyRerunsWithEventDedup(t *testing.T) {
 	count := identifyCount
 	mu.Unlock()
 
-	// The callback re-runs on every tool call so identity changes can be
-	// detected.
+	// The callback re-runs on every tool call.
 	if count != 2 {
 		t.Errorf("expected Identify to be called on each tool call (2), got %d", count)
 	}
 
-	// The identity never changed, so exactly one identify event is published.
+	// An identify event is published every time the callback returns a
+	// non-nil identity — no change-detection dedup.
 	identifyEvents := 0
 	for _, evt := range events {
 		if evt.EventType != nil && *evt.EventType == "agentcat:identify" {
 			identifyEvents++
 		}
 	}
-	if identifyEvents != 1 {
-		t.Errorf("expected exactly 1 identify event (identity unchanged), got %d", identifyEvents)
+	if identifyEvents != 2 {
+		t.Errorf("expected 2 identify events (one per tool call, no dedup), got %d", identifyEvents)
 	}
 }
 

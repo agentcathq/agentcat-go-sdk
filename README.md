@@ -82,7 +82,7 @@ defer shutdown(context.Background())
 
 ### User Identification
 
-Identify your user sessions with a callback to attach user information to every event in a session.
+Identify your user sessions with a callback to attach user information to every event in a session. The callback runs on every auto-captured event (tool calls, resource reads, initialize, and so on); every time it returns a non-nil identity, an `agentcat:identify` event is published and the session identity is updated (`UserID`/`UserName` are overwritten, `UserData` merges across calls). Return `nil` to skip a request — for example, type-assert `*mcp.CallToolRequest` to identify only on tool calls.
 
 **mark3labs/mcp-go:**
 ```go
@@ -92,7 +92,12 @@ import (
 )
 
 shutdown, err := agentcat.Track(s, "proj_YOUR_PROJECT_ID", &agentcat.Options{
-    Identify: func(ctx context.Context, req *mcp.CallToolRequest) *agentcat.UserIdentity {
+    Identify: func(ctx context.Context, request any) *agentcat.UserIdentity {
+        req, ok := request.(*mcp.CallToolRequest)
+        if !ok {
+            return nil // identify on tool calls only
+        }
+        _ = req // extract identity from the request, ctx, headers, or an auth token
         return &agentcat.UserIdentity{
             UserID: "user_12345", UserName: "demo_user",
             UserData: map[string]any{"email": "demo@example.com"},
@@ -109,7 +114,12 @@ import (
 )
 
 shutdown, err := agentcat.Track(s, "proj_YOUR_PROJECT_ID", &agentcat.Options{
-    Identify: func(ctx context.Context, req *mcp.CallToolRequest) *agentcat.UserIdentity {
+    Identify: func(ctx context.Context, request mcp.Request) *agentcat.UserIdentity {
+        req, ok := request.(*mcp.CallToolRequest)
+        if !ok {
+            return nil // identify on tool calls only
+        }
+        _ = req // extract identity from the request, ctx, headers, or an auth token
         return &agentcat.UserIdentity{
             UserID: "user_12345", UserName: "demo_user",
             UserData: map[string]any{"email": "demo@example.com"},
@@ -217,7 +227,7 @@ Diagnostics are on by default and can be turned off completely with either:
 | `DisableToolCallContext` | `bool` | `false` | When `true`, prevents the `context` parameter from being injected on tool calls |
 | `Debug` | `bool` | `false` | Enable debug logging to `~/agentcat.log` |
 | `RedactSensitiveInformation` | `func(string) string` | `nil` | Custom redaction applied to all text data before sending |
-| `Identify` | callback | `nil` | Attach user information to sessions |
+| `Identify` | callback | `nil` | Runs on every auto-captured event to attach user information to sessions; publishes an `agentcat:identify` event whenever it returns a non-nil identity |
 | `Hooks` | `*server.Hooks` | `nil` | Pre-existing hooks to merge with (mcp-go only) |
 | `Exporters` | `map[string]ExporterConfig` | `nil` | Telemetry exporters (`otlp`, `datadog`, `sentry`, `posthog`); with at least one exporter, the project ID may be empty (telemetry-only mode) |
 | `APIBaseURL` | `string` | `https://api.agentcat.com` | Override the AgentCat API endpoint; falls back to `AGENTCAT_API_URL`, then the legacy `MCPCAT_API_URL` env var |
