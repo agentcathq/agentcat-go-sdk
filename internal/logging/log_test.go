@@ -132,7 +132,7 @@ func TestLogger_Info(t *testing.T) {
 
 	// Capture output
 	var buf bytes.Buffer
-	logger.logger = log.New(&buf, "[MCPCat] ", log.LstdFlags)
+	logger.logger = log.New(&buf, "[AgentCat] ", log.LstdFlags)
 
 	logger.Info("test message")
 
@@ -140,8 +140,8 @@ func TestLogger_Info(t *testing.T) {
 	if !strings.Contains(output, "INFO: test message") {
 		t.Errorf("Expected output to contain 'INFO: test message', got: %s", output)
 	}
-	if !strings.Contains(output, "[MCPCat]") {
-		t.Errorf("Expected output to contain '[MCPCat]' prefix, got: %s", output)
+	if !strings.Contains(output, "[AgentCat]") {
+		t.Errorf("Expected output to contain '[AgentCat]' prefix, got: %s", output)
 	}
 }
 
@@ -155,7 +155,7 @@ func TestLogger_Infof(t *testing.T) {
 	defer logger.Close()
 
 	var buf bytes.Buffer
-	logger.logger = log.New(&buf, "[MCPCat] ", log.LstdFlags)
+	logger.logger = log.New(&buf, "[AgentCat] ", log.LstdFlags)
 
 	logger.Infof("formatted %s %d", "message", 42)
 
@@ -175,7 +175,7 @@ func TestLogger_Warn(t *testing.T) {
 	defer logger.Close()
 
 	var buf bytes.Buffer
-	logger.logger = log.New(&buf, "[MCPCat] ", log.LstdFlags)
+	logger.logger = log.New(&buf, "[AgentCat] ", log.LstdFlags)
 
 	logger.Warn("warning message")
 
@@ -195,7 +195,7 @@ func TestLogger_Warnf(t *testing.T) {
 	defer logger.Close()
 
 	var buf bytes.Buffer
-	logger.logger = log.New(&buf, "[MCPCat] ", log.LstdFlags)
+	logger.logger = log.New(&buf, "[AgentCat] ", log.LstdFlags)
 
 	logger.Warnf("warning %s", "test")
 
@@ -215,7 +215,7 @@ func TestLogger_Error(t *testing.T) {
 	defer logger.Close()
 
 	var buf bytes.Buffer
-	logger.logger = log.New(&buf, "[MCPCat] ", log.LstdFlags)
+	logger.logger = log.New(&buf, "[AgentCat] ", log.LstdFlags)
 
 	logger.Error("error message")
 
@@ -235,7 +235,7 @@ func TestLogger_Errorf(t *testing.T) {
 	defer logger.Close()
 
 	var buf bytes.Buffer
-	logger.logger = log.New(&buf, "[MCPCat] ", log.LstdFlags)
+	logger.logger = log.New(&buf, "[AgentCat] ", log.LstdFlags)
 
 	logger.Errorf("error %d", 404)
 
@@ -255,7 +255,7 @@ func TestLogger_Debug(t *testing.T) {
 	defer logger.Close()
 
 	var buf bytes.Buffer
-	logger.logger = log.New(&buf, "[MCPCat] ", log.LstdFlags)
+	logger.logger = log.New(&buf, "[AgentCat] ", log.LstdFlags)
 
 	logger.Debug("debug message")
 
@@ -275,7 +275,7 @@ func TestLogger_Debugf(t *testing.T) {
 	defer logger.Close()
 
 	var buf bytes.Buffer
-	logger.logger = log.New(&buf, "[MCPCat] ", log.LstdFlags)
+	logger.logger = log.New(&buf, "[AgentCat] ", log.LstdFlags)
 
 	logger.Debugf("debug %s", "info")
 
@@ -332,7 +332,7 @@ func TestLogger_DebugEnabled_WritesToFile(t *testing.T) {
 		file:  file,
 		debug: true,
 	}
-	logger.logger = log.New(file, "[MCPCat] ", log.LstdFlags)
+	logger.logger = log.New(file, "[AgentCat] ", log.LstdFlags)
 	defer logger.Close()
 
 	logger.Info("test message")
@@ -420,7 +420,7 @@ func TestOpenLogFile_FailureSilentlyDegrades(t *testing.T) {
 	defer resetGlobalState()
 
 	l := &Logger{debug: true}
-	l.logger = log.New(io.Discard, "[MCPCat] ", log.LstdFlags)
+	l.logger = log.New(io.Discard, "[AgentCat] ", log.LstdFlags)
 
 	// file stays nil if openLogFile was never called (simulates failure path)
 	if l.file != nil {
@@ -454,7 +454,7 @@ func TestLogger_Close(t *testing.T) {
 		file:  file,
 		debug: false,
 	}
-	logger.logger = log.New(io.Discard, "[MCPCat] ", log.LstdFlags)
+	logger.logger = log.New(io.Discard, "[AgentCat] ", log.LstdFlags)
 
 	err = logger.Close()
 	if err != nil {
@@ -477,7 +477,7 @@ func TestLogger_Close_NilFile(t *testing.T) {
 		file:  nil,
 		debug: false,
 	}
-	logger.logger = log.New(io.Discard, "[MCPCat] ", log.LstdFlags)
+	logger.logger = log.New(io.Discard, "[AgentCat] ", log.LstdFlags)
 
 	err := logger.Close()
 	if err != nil {
@@ -749,7 +749,7 @@ func TestDiagnosticsSink_PanicDoesNotBreakLogging(t *testing.T) {
 
 	lg := New()
 	var buf bytes.Buffer
-	lg.logger = log.New(&buf, "[MCPCat] ", log.LstdFlags)
+	lg.logger = log.New(&buf, "[AgentCat] ", log.LstdFlags)
 
 	lg.Info("survives") // must not panic
 

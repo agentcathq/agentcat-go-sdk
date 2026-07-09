@@ -127,8 +127,12 @@ func extractExtra(message any) map[string]any {
 		return nil
 	}
 
+	// Guard the reflection carefully: IsNil panics on non-nilable kinds and
+	// Interface panics on fields obtained through unexported embedding, so
+	// check Kind and CanInterface before either call.
 	headerField := v.FieldByName("Header")
-	if !headerField.IsValid() || headerField.IsNil() {
+	if !headerField.IsValid() || headerField.Kind() != reflect.Map ||
+		!headerField.CanInterface() || headerField.IsNil() {
 		return nil
 	}
 

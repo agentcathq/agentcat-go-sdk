@@ -6,6 +6,7 @@ import (
 	"testing"
 
 	"github.com/mark3labs/mcp-go/mcp"
+	agentcat "go.agentcat.com/sdk"
 )
 
 func TestAddContextParamsToToolsList(t *testing.T) {
@@ -129,7 +130,7 @@ func TestAddContextParamsToToolsList(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			addContextParamsToToolsList(tt.input)
+			addContextParamsToToolsList(tt.input, "")
 			tt.validate(t, tt.input)
 		})
 	}
@@ -278,7 +279,7 @@ func TestEnsureToolHasContextParam(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			result := ensureToolHasContextParam(tt.input)
+			result := ensureToolHasContextParam(tt.input, agentcat.DefaultContextDescription)
 			tt.validate(t, result)
 		})
 	}
@@ -485,7 +486,7 @@ func TestAddContextParamToRawSchema(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			result, ok := addContextParamToRawSchema(tt.input)
+			result, ok := addContextParamToRawSchema(tt.input, agentcat.DefaultContextDescription)
 			if ok != tt.wantOk {
 				t.Errorf("ok = %v, want %v", ok, tt.wantOk)
 			}

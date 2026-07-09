@@ -93,7 +93,7 @@ func TestSessionCapture_ServerInfoFromInitialize(t *testing.T) {
 func TestSessionCapture_IdentifyFunctionCalled(t *testing.T) {
 	var callCount atomic.Int32
 
-	identifyFn := func(ctx context.Context, request *mcp.CallToolRequest) *agentcat.UserIdentity {
+	identifyFn := func(ctx context.Context, request any) *agentcat.UserIdentity {
 		callCount.Add(1)
 		return &agentcat.UserIdentity{
 			UserID:   "user-42",
@@ -133,7 +133,7 @@ func TestSessionCapture_IdentifyFunctionCalled(t *testing.T) {
 func TestSessionCapture_IdentifyNilResult(t *testing.T) {
 	var callCount atomic.Int32
 
-	identifyFn := func(ctx context.Context, request *mcp.CallToolRequest) *agentcat.UserIdentity {
+	identifyFn := func(ctx context.Context, request any) *agentcat.UserIdentity {
 		callCount.Add(1)
 		return nil // intentionally return nil
 	}

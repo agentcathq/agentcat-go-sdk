@@ -15,12 +15,12 @@ func TestRegister(t *testing.T) {
 	tests := []struct {
 		name     string
 		server   any
-		instance *core.MCPcatInstance
+		instance *core.AgentCatInstance
 	}{
 		{
 			name:   "register pointer server",
 			server: &mockServer{name: "test1"},
-			instance: &core.MCPcatInstance{
+			instance: &core.AgentCatInstance{
 				ProjectID: "proj1",
 				Options:   &core.Options{},
 			},
@@ -28,7 +28,7 @@ func TestRegister(t *testing.T) {
 		{
 			name:   "register another pointer server",
 			server: &mockServer{name: "test2"},
-			instance: &core.MCPcatInstance{
+			instance: &core.AgentCatInstance{
 				ProjectID: "proj2",
 				Options:   &core.Options{},
 			},
@@ -60,7 +60,7 @@ func TestRegister_PanicsOnNil(t *testing.T) {
 		}
 	}()
 
-	Register(nil, &core.MCPcatInstance{ProjectID: "proj"})
+	Register(nil, &core.AgentCatInstance{ProjectID: "proj"})
 }
 
 func TestRegister_PanicsOnNonPointer(t *testing.T) {
@@ -72,7 +72,7 @@ func TestRegister_PanicsOnNonPointer(t *testing.T) {
 		}
 	}()
 
-	Register(mockServer{name: "value"}, &core.MCPcatInstance{ProjectID: "proj"})
+	Register(mockServer{name: "value"}, &core.AgentCatInstance{ProjectID: "proj"})
 }
 
 func TestGet(t *testing.T) {
@@ -87,7 +87,7 @@ func TestGet(t *testing.T) {
 			name: "get registered server",
 			setupFunc: func() any {
 				server := &mockServer{name: "test1"}
-				Register(server, &core.MCPcatInstance{
+				Register(server, &core.AgentCatInstance{
 					ProjectID: "proj1",
 					Options:   &core.Options{},
 				})
@@ -143,7 +143,7 @@ func TestUnregister(t *testing.T) {
 			name: "unregister existing server",
 			setupFunc: func() any {
 				server := &mockServer{name: "test1"}
-				Register(server, &core.MCPcatInstance{
+				Register(server, &core.AgentCatInstance{
 					ProjectID: "proj1",
 					Options:   &core.Options{},
 				})
@@ -228,7 +228,7 @@ func TestConcurrentAccess(t *testing.T) {
 		go func(idx int) {
 			defer wg.Done()
 			for j := 0; j < numOperations; j++ {
-				Register(servers[idx], &core.MCPcatInstance{
+				Register(servers[idx], &core.AgentCatInstance{
 					ProjectID: "concurrent",
 					Options:   &core.Options{},
 				})
@@ -283,7 +283,7 @@ func TestConcurrentMixedOperations(t *testing.T) {
 	for i := 0; i < numGoroutines; i++ {
 		go func(idx int) {
 			defer wg.Done()
-			Register(servers[idx], &core.MCPcatInstance{
+			Register(servers[idx], &core.AgentCatInstance{
 				ProjectID: "mixed",
 				Options:   &core.Options{},
 			})
@@ -307,7 +307,7 @@ func TestRegistryLifecycle(t *testing.T) {
 	clearRegistry()
 
 	server := &mockServer{name: "lifecycle"}
-	instance := &core.MCPcatInstance{
+	instance := &core.AgentCatInstance{
 		ProjectID: "lifecycle-proj",
 		Options:   &core.Options{},
 	}
@@ -348,7 +348,7 @@ func TestMultipleServers(t *testing.T) {
 		{name: "server3"},
 	}
 
-	instances := []*core.MCPcatInstance{
+	instances := []*core.AgentCatInstance{
 		{ProjectID: "proj1", Options: &core.Options{}},
 		{ProjectID: "proj2", Options: &core.Options{}},
 		{ProjectID: "proj3", Options: &core.Options{}},
@@ -388,12 +388,12 @@ func TestRegisterOverwrite(t *testing.T) {
 
 	server := &mockServer{name: "test"}
 
-	instance1 := &core.MCPcatInstance{
+	instance1 := &core.AgentCatInstance{
 		ProjectID: "proj1",
 		Options:   &core.Options{},
 	}
 
-	instance2 := &core.MCPcatInstance{
+	instance2 := &core.AgentCatInstance{
 		ProjectID: "proj2",
 		Options:   &core.Options{},
 	}
@@ -417,5 +417,5 @@ func TestRegisterOverwrite(t *testing.T) {
 func clearRegistry() {
 	registryMu.Lock()
 	defer registryMu.Unlock()
-	serverMCPcatMap = make(map[any]*core.MCPcatInstance)
+	serverMCPcatMap = make(map[any]*core.AgentCatInstance)
 }

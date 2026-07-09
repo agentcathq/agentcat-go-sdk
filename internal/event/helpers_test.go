@@ -398,8 +398,8 @@ func TestCreateIdentifyEvent(t *testing.T) {
 				if evt.GetSessionId() != "ses_xyz" {
 					t.Errorf("expected SessionID 'ses_xyz', got %s", evt.GetSessionId())
 				}
-				if evt.EventType == nil || *evt.EventType != "mcpcat:identify" {
-					t.Errorf("expected EventType 'mcpcat:identify', got %v", evt.EventType)
+				if evt.EventType == nil || *evt.EventType != "agentcat:identify" {
+					t.Errorf("expected EventType 'agentcat:identify', got %v", evt.EventType)
 				}
 				if evt.Timestamp == nil {
 					t.Error("timestamp should be set")

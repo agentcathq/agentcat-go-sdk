@@ -1,7 +1,6 @@
 package event
 
 import (
-	"encoding/json"
 	"fmt"
 	"time"
 
@@ -11,7 +10,7 @@ import (
 	"go.agentcat.com/sdk/internal/exceptions"
 )
 
-// NewEventID generates a new unique event ID with the MCPCat prefix.
+// NewEventID generates a new unique event ID with the AgentCat prefix.
 func NewEventID() string {
 	return fmt.Sprintf("%s_%s", core.PrefixEvent, ksuid.New().String())
 }
@@ -58,25 +57,17 @@ func NewEvent(session *core.Session, eventType string, duration *int32, isError 
 }
 
 // ConvertToMap converts any value (including structs, slices of structs) to
-// map[string]any or []any by marshaling to JSON and unmarshaling back. This
-// ensures the redactor can process all fields. If conversion fails, the
-// original value is returned to avoid impacting the server.
+// map[string]any or []any via core.JSONRoundTrip. This ensures the redactor
+// can process all fields. If conversion fails, the original value is returned
+// to avoid impacting the server.
 func ConvertToMap(v any) any {
 	if v == nil {
 		return nil
 	}
-
-	data, err := json.Marshal(v)
-	if err != nil {
-		return v
+	if result, ok := core.JSONRoundTrip(v); ok {
+		return result
 	}
-
-	var result any
-	if err := json.Unmarshal(data, &result); err != nil {
-		return v
-	}
-
-	return result
+	return v
 }
 
 // CopySessionToEvent copies session metadata fields to the event.
@@ -98,7 +89,7 @@ func CopySessionToEvent(session *core.Session, event *Event) {
 	event.IdentifyData = session.IdentifyData
 }
 
-// CreateIdentifyEvent creates an Event for mcpcat:identify event type.
+// CreateIdentifyEvent creates an Event for agentcat:identify event type.
 func CreateIdentifyEvent(session *core.Session) *Event {
 	if session == nil {
 		return nil
@@ -116,7 +107,7 @@ func CreateIdentifyEvent(session *core.Session) *Event {
 		projectID = *session.ProjectID
 	}
 
-	eventType := "mcpcat:identify"
+	eventType := "agentcat:identify"
 	event := &Event{
 		PublishEventRequest: agentcatapi.PublishEventRequest{
 			Id:        &eventID,

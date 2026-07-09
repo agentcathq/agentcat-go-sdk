@@ -30,19 +30,37 @@ func getOrCreateSession(
 	}
 
 	rawSessionID := serverSession.ID()
-	if rawSessionID == "" {
+
+	// Sessions without a real transport session ID share the "nosessionid"
+	// map key and get a random (non-deterministic) session ID.
+	isPlaceholder := agentcat.IsPlaceholderSessionID(rawSessionID)
+	if isPlaceholder {
 		rawSessionID = "nosessionid"
 	}
 
-	formattedSessionID := agentcat.NewSessionID()
-	newPS := &agentcat.ProtectedSession{
-		Sess: &agentcat.Session{
-			SessionID: &formattedSessionID,
-			ProjectID: &projectID,
-		},
-	}
+	// Fast path: the session already exists for this raw transport session
+	// key, so skip the session ID derivation and allocation.
+	ps, loaded := sessionMap.Load(rawSessionID)
+	if !loaded {
+		// Derive a deterministic session ID from the transport session ID so
+		// sessions are stable across server restarts. Fall back to a random
+		// ID when there is no real transport session ID (e.g. stdio).
+		var formattedSessionID string
+		if !isPlaceholder {
+			formattedSessionID = agentcat.DeriveSessionID(rawSessionID, projectID)
+		} else {
+			formattedSessionID = agentcat.NewSessionID()
+		}
 
-	ps, _ := sessionMap.LoadOrStore(rawSessionID, newPS)
+		newPS := &agentcat.ProtectedSession{
+			Sess: &agentcat.Session{
+				SessionID: &formattedSessionID,
+				ProjectID: &projectID,
+			},
+		}
+
+		ps, _ = sessionMap.LoadOrStore(rawSessionID, newPS)
+	}
 
 	ps.Mu.Lock()
 	defer ps.Mu.Unlock()

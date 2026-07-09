@@ -56,7 +56,7 @@ func TestInitPublisher(t *testing.T) {
 	// Ensure clean state
 	publisher.ShutdownGlobal(context.Background())
 
-	publishFn := InitPublisher(nil, "")
+	publishFn := InitPublisher(nil, "", nil)
 	defer Shutdown(context.Background())
 
 	if publishFn == nil {
@@ -75,7 +75,7 @@ func TestInitPublisher_WithRedactFunc(t *testing.T) {
 	publisher.ShutdownGlobal(context.Background())
 
 	redactFn := func(s string) string { return "***" }
-	publishFn := InitPublisher(redactFn, "")
+	publishFn := InitPublisher(redactFn, "", nil)
 	defer Shutdown(context.Background())
 
 	if publishFn == nil {
@@ -86,7 +86,7 @@ func TestInitPublisher_WithRedactFunc(t *testing.T) {
 func TestShutdown(t *testing.T) {
 	publisher.ShutdownGlobal(context.Background())
 
-	_ = InitPublisher(nil, "")
+	_ = InitPublisher(nil, "", nil)
 
 	err := Shutdown(context.Background())
 	if err != nil {
@@ -271,7 +271,8 @@ func TestSentinelErrors(t *testing.T) {
 }
 
 func TestResolveAPIBaseURL(t *testing.T) {
-	t.Run("option takes precedence over env var", func(t *testing.T) {
+	t.Run("option takes precedence over env vars", func(t *testing.T) {
+		t.Setenv("AGENTCAT_API_URL", "https://agentcat-env.example.com")
 		t.Setenv("MCPCAT_API_URL", "https://env.example.com")
 		got := ResolveAPIBaseURL("https://option.example.com")
 		if got != "https://option.example.com" {
@@ -279,7 +280,17 @@ func TestResolveAPIBaseURL(t *testing.T) {
 		}
 	})
 
-	t.Run("env var used when option is empty", func(t *testing.T) {
+	t.Run("AGENTCAT_API_URL takes precedence over legacy MCPCAT_API_URL", func(t *testing.T) {
+		t.Setenv("AGENTCAT_API_URL", "https://agentcat-env.example.com")
+		t.Setenv("MCPCAT_API_URL", "https://env.example.com")
+		got := ResolveAPIBaseURL("")
+		if got != "https://agentcat-env.example.com" {
+			t.Errorf("ResolveAPIBaseURL() = %q, want %q", got, "https://agentcat-env.example.com")
+		}
+	})
+
+	t.Run("legacy MCPCAT_API_URL used when AGENTCAT_API_URL is empty", func(t *testing.T) {
+		t.Setenv("AGENTCAT_API_URL", "")
 		t.Setenv("MCPCAT_API_URL", "https://env.example.com")
 		got := ResolveAPIBaseURL("")
 		if got != "https://env.example.com" {
@@ -287,7 +298,8 @@ func TestResolveAPIBaseURL(t *testing.T) {
 		}
 	})
 
-	t.Run("returns empty when neither option nor env var set", func(t *testing.T) {
+	t.Run("returns empty when neither option nor env vars set", func(t *testing.T) {
+		t.Setenv("AGENTCAT_API_URL", "")
 		t.Setenv("MCPCAT_API_URL", "")
 		got := ResolveAPIBaseURL("")
 		if got != "" {

@@ -1,7 +1,7 @@
 # Repository Guidelines
 
 ## Project Structure & Module Organization
-This Go module exposes the public SDK in `mcpcat.go` and `types.go`. Library-specific state lives under `internal/`. Key packages: `internal/compat` detects supported MCP servers and applies server options; `internal/tracking` registers Mark3 Labs hooks and cooperates with `internal/session` to capture client metadata; `internal/logging` centralizes file-backed logging to `~/mcpcat.log`; `internal/registry` keeps a thread-safe map between servers and `MCPcatInstance`. `internal/event` and `internal/redaction` currently stub future expansion—keep contributions narrowly scoped and documented.
+This Go module exposes the public SDK in `mcpcat.go` and `types.go`. Library-specific state lives under `internal/`. Key packages: `internal/compat` detects supported MCP servers and applies server options; `internal/tracking` registers Mark3 Labs hooks and cooperates with `internal/session` to capture client metadata; `internal/logging` centralizes file-backed logging to `~/agentcat.log`; `internal/registry` keeps a thread-safe map between servers and `AgentCatInstance`. `internal/event` and `internal/redaction` currently stub future expansion—keep contributions narrowly scoped and documented.
 
 ## Build, Test, and Development Commands
 Use `go build ./...` to confirm every package compiles before opening a PR. Run `go test ./...` (add `-run <Pattern>` for focused suites, `-cover` for coverage) once you introduce `_test.go` files. Format code with `go fmt ./...`; pair it with `gofmt -w <file>` for quick fixes. Apply `go mod tidy` only when dependencies truly change so the module file stays stable.

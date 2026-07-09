@@ -52,3 +52,49 @@ func TestGetDependencyVersion_UnknownDep(t *testing.T) {
 		t.Errorf("expected \"dev\" for unknown dependency, got %q", version)
 	}
 }
+
+func TestDeriveSessionIDFromMCPSession_Deterministic(t *testing.T) {
+	a := DeriveSessionIDFromMCPSession("mcp-session-abc-123", "proj_test123")
+	b := DeriveSessionIDFromMCPSession("mcp-session-abc-123", "proj_test123")
+	if a != b {
+		t.Errorf("same inputs produced different IDs: %q vs %q", a, b)
+	}
+}
+
+func TestDeriveSessionIDFromMCPSession_DifferentInputsDiffer(t *testing.T) {
+	base := DeriveSessionIDFromMCPSession("mcp-session-abc-123", "proj_test123")
+
+	if got := DeriveSessionIDFromMCPSession("other-session", "proj_test123"); got == base {
+		t.Error("different session IDs produced the same derived ID")
+	}
+	if got := DeriveSessionIDFromMCPSession("mcp-session-abc-123", "proj_other"); got == base {
+		t.Error("different project IDs produced the same derived ID")
+	}
+	if got := DeriveSessionIDFromMCPSession("mcp-session-abc-123", ""); got == base {
+		t.Error("empty project ID should hash differently than a set project ID")
+	}
+}
+
+// TestDeriveSessionIDFromMCPSession_TypeScriptParity pins the derivation to
+// vectors generated with the TypeScript SDK's deriveSessionIdFromMCPSession
+// (src/modules/session.ts), so both SDKs derive identical session IDs.
+func TestDeriveSessionIDFromMCPSession_TypeScriptParity(t *testing.T) {
+	tests := []struct {
+		mcpSessionID string
+		projectID    string
+		want         string
+	}{
+		{"mcp-session-abc-123", "proj_test123", "ses_2bnWqnQqYsZ7lqMDFWpkqB9Ebay"},
+		{"mcp-session-abc-123", "", "ses_2awGVYhEGzrfGtJmPAo5Jc28EV7"},
+		{"some-other-session", "proj_test123", "ses_2bcgkVQlG56y9St4NcfT7DarkO4"},
+		{"user-session-12345", "proj_abc123xyz", "ses_2aTphr3eCURA3wWq3LqL1JIsNm2"},
+	}
+
+	for _, tt := range tests {
+		got := DeriveSessionIDFromMCPSession(tt.mcpSessionID, tt.projectID)
+		if got != tt.want {
+			t.Errorf("DeriveSessionIDFromMCPSession(%q, %q) = %q, want %q",
+				tt.mcpSessionID, tt.projectID, got, tt.want)
+		}
+	}
+}

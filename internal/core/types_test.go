@@ -265,19 +265,21 @@ func TestUserIdentity(t *testing.T) {
 func TestExporterConfig(t *testing.T) {
 	// Test that ExporterConfig can be created and populated correctly
 	config := &ExporterConfig{
-		Type: "otlp",
-		Config: map[string]any{
-			"endpoint": "localhost:4317",
-			"insecure": true,
-		},
+		Type:     "otlp",
+		Endpoint: "http://localhost:4318",
+		Headers:  map[string]string{"Authorization": "Bearer token"},
 	}
 
 	if config.Type != "otlp" {
 		t.Errorf("Expected Type 'otlp', got '%s'", config.Type)
 	}
 
-	if len(config.Config) != 2 {
-		t.Errorf("Expected 2 items in Config, got %d", len(config.Config))
+	if config.Endpoint != "http://localhost:4318" {
+		t.Errorf("Expected Endpoint 'http://localhost:4318', got '%s'", config.Endpoint)
+	}
+
+	if len(config.Headers) != 1 {
+		t.Errorf("Expected 1 header, got %d", len(config.Headers))
 	}
 }
 

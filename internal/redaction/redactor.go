@@ -2,9 +2,19 @@ package redaction
 
 import (
 	"go.agentcat.com/sdk/internal/core"
+	"go.agentcat.com/sdk/internal/walk"
 )
 
-const redactionErrorPlaceholder = "[REDACTION_ERROR]"
+const (
+	redactionErrorPlaceholder = "[REDACTION_ERROR]"
+
+	// Placeholders produced by the shared bounded walk. Recursion must be
+	// bounded here: redaction runs before truncation's cycle-safe
+	// normalization, and a stack overflow is a fatal, unrecoverable runtime
+	// error.
+	depthLimitPlaceholder = walk.DepthLimitPlaceholder
+	circularPlaceholder   = walk.CircularPlaceholder
+)
 
 // RedactEvent applies the redaction function to all string values in the event's
 // Parameters, Response, UserIntent, and Error fields. It recursively descends
@@ -41,46 +51,23 @@ func RedactEvent(event *core.Event, redactFn core.RedactFunc) error {
 	return nil
 }
 
-// redactMap recursively processes a map, creating a new map with redacted string values
+// redactMap recursively processes a map, creating a new map with redacted
+// string values. Self-referential values and excessive depth are replaced
+// with placeholders so recursion is always bounded.
 func redactMap(m map[string]any, redactFn core.RedactFunc) map[string]any {
 	if m == nil {
 		return nil
 	}
-
-	result := make(map[string]any, len(m))
-	for k, v := range m {
-		result[k] = redactValue(v, redactFn)
-	}
+	result, _ := redactValue(m, redactFn).(map[string]any)
 	return result
 }
 
-// redactValue recursively processes a value based on its type
+// redactValue recursively redacts all string values in v via the shared
+// bounded deep-walk (cycle- and depth-guarded).
 func redactValue(v any, redactFn core.RedactFunc) any {
-	if v == nil {
-		return nil
-	}
-
-	switch val := v.(type) {
-	case string:
-		// Apply redaction function with panic recovery
-		return safeRedact(val, redactFn)
-
-	case map[string]any:
-		// Recursively redact nested maps
-		return redactMap(val, redactFn)
-
-	case []any:
-		// Recursively redact slices
-		result := make([]any, len(val))
-		for i, item := range val {
-			result[i] = redactValue(item, redactFn)
-		}
-		return result
-
-	default:
-		// For other types (numbers, bools, etc.), return as-is
-		return v
-	}
+	return walk.Bounded(v, func(s string) any {
+		return safeRedact(s, redactFn)
+	})
 }
 
 // safeRedact applies the redaction function with panic recovery

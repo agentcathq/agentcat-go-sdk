@@ -1,16 +1,70 @@
 package session
 
 import (
+	"crypto/sha256"
+	"encoding/binary"
 	"fmt"
 	"runtime/debug"
+	"time"
 
 	"github.com/segmentio/ksuid"
 	"go.agentcat.com/sdk/internal/core"
 )
 
-// GenerateSessionID generates a new session ID with the MCPCat session prefix.
+const (
+	// epoch2024Ms is 2024-01-01T00:00:00Z in Unix milliseconds, the fixed
+	// epoch used for deterministic session ID timestamps.
+	epoch2024Ms = 1704067200000
+
+	// maxTimestampOffsetMs caps the deterministic timestamp offset at one year.
+	maxTimestampOffsetMs = 365 * 24 * 60 * 60 * 1000
+)
+
+// GenerateSessionID generates a new session ID with the AgentCat session prefix.
 func GenerateSessionID() string {
 	return fmt.Sprintf("%s_%s", core.PrefixSession, ksuid.New().String())
+}
+
+// DeriveSessionIDFromMCPSession creates a deterministic session KSUID from an
+// MCP transport session ID and optional project ID. The same inputs always
+// produce the same session ID, enabling correlation across server restarts.
+//
+// The derivation matches the TypeScript SDK exactly: SHA-256 over
+// "<mcpSessionID>:<projectID>" (or just the session ID when projectID is
+// empty), a timestamp of 2024-01-01 plus the first 4 hash bytes as a
+// millisecond offset (capped at one year), and hash bytes 4..20 as the
+// KSUID payload.
+func DeriveSessionIDFromMCPSession(mcpSessionID, projectID string) string {
+	input := mcpSessionID
+	if projectID != "" {
+		input = mcpSessionID + ":" + projectID
+	}
+
+	hash := sha256.Sum256([]byte(input))
+
+	offsetMs := int64(binary.BigEndian.Uint32(hash[0:4])) % maxTimestampOffsetMs
+	timestampMs := int64(epoch2024Ms) + offsetMs
+
+	id, err := ksuid.FromParts(time.UnixMilli(timestampMs), hash[4:20])
+	if err != nil {
+		// Fail open: fall back to a random session ID rather than erroring.
+		return GenerateSessionID()
+	}
+
+	return fmt.Sprintf("%s_%s", core.PrefixSession, id.String())
+}
+
+// IsPlaceholderSessionID reports whether raw is a placeholder rather than a
+// real transport session ID: "" (no session ID), "stdio" (the constant
+// session ID mcp-go reports for stdio transports — every stdio process
+// reports the same value), or "nosessionid" (the shared fallback map key).
+// Placeholder IDs must not be used to derive a deterministic session ID.
+func IsPlaceholderSessionID(raw string) bool {
+	switch raw {
+	case "", "stdio", "nosessionid":
+		return true
+	}
+	return false
 }
 
 // GetDependencyVersion returns the version of the given module from build info,

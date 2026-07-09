@@ -4,16 +4,16 @@ import (
 	"encoding/json"
 
 	"github.com/modelcontextprotocol/go-sdk/mcp"
+
+	agentcat "go.agentcat.com/sdk"
 )
 
-const (
-	contextParamName        = "context"
-	contextParamDescription = `Explain why you are calling this tool and how it fits into the user's overall goal. This parameter is used for analytics and user intent tracking. YOU MUST provide 15-25 words (count carefully). NEVER use first person ('I', 'we', 'you') - maintain third-person perspective. NEVER include sensitive information such as credentials, passwords, or personal data. Example (20 words): "Searching across the organization's repositories to find all open issues related to performance complaints and latency issues for team prioritization."`
-)
+const contextParamName = "context"
 
 // injectContextParams modifies a tools/list result to add a "context" parameter
-// to each tool's input schema.
-func injectContextParams(result mcp.Result) {
+// to each tool's input schema. customDescription overrides the default
+// parameter description (agentcat.DefaultContextDescription) when non-empty.
+func injectContextParams(result mcp.Result, customDescription string) {
 	if result == nil {
 		return
 	}
@@ -22,14 +22,23 @@ func injectContextParams(result mcp.Result) {
 		return
 	}
 
+	description := agentcat.ResolveContextDescription(customDescription)
+
 	for i, tool := range listResult.Tools {
-		listResult.Tools[i] = ensureToolHasContextParam(tool)
+		listResult.Tools[i] = ensureToolHasContextParam(tool, description)
 	}
 }
 
-// ensureToolHasContextParam adds the "context" property to a tool's input schema
-// if it doesn't already exist.
-func ensureToolHasContextParam(tool *mcp.Tool) *mcp.Tool {
+// ensureToolHasContextParam returns a copy of the tool with the "context"
+// property added to its input schema (or the tool unchanged if it already has
+// one).
+//
+// It never mutates the given tool or any map reachable from it: the go-sdk's
+// ListToolsResult carries pointers to the server's registered Tool objects,
+// which are shared across concurrent requests. Mutating them in place would
+// be a data race (and a fatal concurrent map write on the nested properties
+// map when two tools/list requests overlap).
+func ensureToolHasContextParam(tool *mcp.Tool, description string) *mcp.Tool {
 	if tool == nil {
 		return tool
 	}
@@ -39,7 +48,8 @@ func ensureToolHasContextParam(tool *mcp.Tool) *mcp.Tool {
 	}
 
 	// The official SDK's Tool.InputSchema is `any`.
-	// We need to convert it to a map, add the context property, and set it back.
+	// We need to convert it to a map, add the context property, and set it
+	// back on a copy of the tool.
 	schema := schemaToMap(tool.InputSchema)
 	if schema == nil {
 		schema = map[string]any{
@@ -57,29 +67,34 @@ func ensureToolHasContextParam(tool *mcp.Tool) *mcp.Tool {
 		schema["type"] = "object"
 	}
 
-	// Get or create properties
-	props, _ := schema["properties"].(map[string]any)
-	if props == nil {
-		props = make(map[string]any)
+	// Copy properties before adding: schemaToMap only copies the top-level
+	// map, so the nested properties map may still be shared with the
+	// server's registered tool.
+	oldProps, _ := schema["properties"].(map[string]any)
+	props := make(map[string]any, len(oldProps)+1)
+	for k, v := range oldProps {
+		props[k] = v
 	}
 
 	// Add context property
 	props[contextParamName] = map[string]any{
 		"type":        "string",
-		"description": contextParamDescription,
+		"description": description,
 	}
 	schema["properties"] = props
 
-	// Add to required
+	// Add to required (extractRequired always returns a copy)
 	required := extractRequired(schema["required"])
 	if !containsString(required, contextParamName) {
 		required = append(required, contextParamName)
 	}
 	schema["required"] = required
 
-	tool.InputSchema = schema
+	// Return a copy of the tool so the shared original is never written.
+	updated := *tool
+	updated.InputSchema = schema
 
-	return tool
+	return &updated
 }
 
 // toolHasContextParam checks if the tool already has a "context" parameter.

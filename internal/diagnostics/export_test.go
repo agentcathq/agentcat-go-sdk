@@ -32,7 +32,7 @@ func TestExport_PostsOTLPWithAuth(t *testing.T) {
 	defer ResetForTest()
 
 	Init("proj_1", false, "officialsdk", "github.com/modelcontextprotocol/go-sdk")
-	capture(logging.LevelInfo, "MCPCat setup started | project proj_1")
+	capture(logging.LevelInfo, "AgentCat setup started | project proj_1")
 	Flush()
 
 	got := <-ch
@@ -56,17 +56,17 @@ func TestExport_PostsOTLPWithAuth(t *testing.T) {
 		t.Fatalf("scope = %+v, want name %q", rl.ScopeLogs, DiagnosticsScopeName)
 	}
 	recs := rl.ScopeLogs[0].LogRecords
-	if len(recs) == 0 || recs[0].Body.StringValue != "MCPCat setup started | project proj_1" {
+	if len(recs) == 0 || recs[0].Body.StringValue != "AgentCat setup started | project proj_1" {
 		t.Fatalf("logRecords = %+v, want body match", recs)
 	}
 	var hasProject bool
 	for _, a := range rl.Resource.Attributes {
-		if a.Key == "mcpcat.project_id" && a.Value.StringValue == "proj_1" {
+		if a.Key == "agentcat.project_id" && a.Value.StringValue == "proj_1" {
 			hasProject = true
 		}
 	}
 	if !hasProject {
-		t.Error("resource attributes must include mcpcat.project_id=proj_1")
+		t.Error("resource attributes must include agentcat.project_id=proj_1")
 	}
 }
 
@@ -120,7 +120,7 @@ func TestFlush_TransportErrorSwallowed(t *testing.T) {
 	defer ResetForTest()
 
 	Init("proj_1", false, "officialsdk", "github.com/modelcontextprotocol/go-sdk")
-	capture(logging.LevelInfo, "MCPCat setup complete | proj_1")
+	capture(logging.LevelInfo, "AgentCat setup complete | proj_1")
 
 	Flush() // must return without panic even though the POST fails
 
