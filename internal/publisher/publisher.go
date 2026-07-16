@@ -26,11 +26,11 @@ var (
 // configs are provided and the publisher already exists, its telemetry
 // manager is replaced (mirroring the TypeScript SDK, where track() installs a
 // fresh TelemetryManager on the shared event queue).
-func GetOrInit(redactFn core.RedactFunc, apiBaseURL string, exporterConfigs map[string]core.ExporterConfig) *Publisher {
+func GetOrInit(redactFn core.RedactFunc, redactEventFn core.RedactEventFunc, apiBaseURL string, exporterConfigs map[string]core.ExporterConfig) *Publisher {
 	globalMu.Lock()
 	defer globalMu.Unlock()
 	if globalPub == nil {
-		globalPub = New(redactFn, apiBaseURL, exporterConfigs)
+		globalPub = New(redactFn, redactEventFn, apiBaseURL, exporterConfigs)
 	} else if len(exporterConfigs) > 0 {
 		globalPub.SetTelemetryManager(exporters.NewManager(exporterConfigs))
 	}
@@ -54,15 +54,16 @@ func ShutdownGlobal(ctx context.Context) error {
 // Publisher handles asynchronous event publishing to the AgentCat API and
 // fan-out to configured telemetry exporters.
 type Publisher struct {
-	queue        chan *core.Event
-	apiClient    *agentcatapi.APIClient
-	logger       *logging.Logger
-	redactFn     core.RedactFunc
-	wg           sync.WaitGroup
-	closeMu      sync.Mutex
-	closed       bool
-	shutdownCh   chan struct{}
-	shutdownOnce sync.Once
+	queue         chan *core.Event
+	apiClient     *agentcatapi.APIClient
+	logger        *logging.Logger
+	redactFn      core.RedactFunc
+	redactEventFn core.RedactEventFunc
+	wg            sync.WaitGroup
+	closeMu       sync.Mutex
+	closed        bool
+	shutdownCh    chan struct{}
+	shutdownOnce  sync.Once
 
 	// telemetry fans events out to configured exporters. It is replaceable at
 	// runtime (see GetOrInit) and may be nil when no exporters are configured.
@@ -79,7 +80,7 @@ type Publisher struct {
 
 // New creates a new Publisher instance and starts worker goroutines.
 // If apiBaseURL is empty, the default AgentCat API URL is used.
-func New(redactFn core.RedactFunc, apiBaseURL string, exporterConfigs map[string]core.ExporterConfig) *Publisher {
+func New(redactFn core.RedactFunc, redactEventFn core.RedactEventFunc, apiBaseURL string, exporterConfigs map[string]core.ExporterConfig) *Publisher {
 	logger := logging.New()
 
 	baseURL := DefaultAPIBaseURL
@@ -98,12 +99,13 @@ func New(redactFn core.RedactFunc, apiBaseURL string, exporterConfigs map[string
 	apiClient := agentcatapi.NewAPIClient(cfg)
 
 	p := &Publisher{
-		queue:      make(chan *core.Event, QueueSize),
-		apiClient:  apiClient,
-		logger:     logger,
-		redactFn:   redactFn,
-		shutdownCh: make(chan struct{}),
-		maxRetries: MaxRetries,
+		queue:         make(chan *core.Event, QueueSize),
+		apiClient:     apiClient,
+		logger:        logger,
+		redactFn:      redactFn,
+		redactEventFn: redactEventFn,
+		shutdownCh:    make(chan struct{}),
+		maxRetries:    MaxRetries,
 	}
 	p.sendFn = p.sendEvent
 
@@ -162,6 +164,19 @@ func (p *Publisher) SetTelemetryManager(m *exporters.Manager) {
 // 4s). Retries are interrupted by shutdown. Events without a project ID
 // (telemetry-only mode) go to exporters only and skip the API send.
 func (p *Publisher) publishEvent(event *core.Event, workerID int) {
+	if p.redactEventFn != nil {
+		kept, err := redaction.ApplyEventRedaction(event, p.redactEventFn)
+		if err != nil {
+			p.logger.Warnf("Worker %d failed to redact event %s (event-level hook), dropping event: %v",
+				workerID, event.GetId(), err)
+			return
+		}
+		if !kept {
+			p.logger.Debugf("Worker %d event %s dropped by RedactEvent hook", workerID, event.GetId())
+			return
+		}
+	}
+
 	if p.redactFn != nil {
 		err := redaction.RedactEvent(event, p.redactFn)
 		if err != nil {
@@ -266,21 +281,26 @@ func (p *Publisher) Publish(event *core.Event) bool {
 		return false
 	}
 
+	// Capture the id before enqueueing: once the event is handed to the queue
+	// a worker owns it (and may rewrite it via the event-level redaction
+	// hook), so the producer must not read it afterwards.
+	eventID := event.GetId()
+
 	p.closeMu.Lock()
 	if p.closed {
 		p.closeMu.Unlock()
-		p.logger.Warnf("Publish rejected (shutting down), dropping event %s", event.GetId())
+		p.logger.Warnf("Publish rejected (shutting down), dropping event %s", eventID)
 		return false
 	}
 
 	select {
 	case p.queue <- event:
 		p.closeMu.Unlock()
-		p.logger.Debugf("Event %s enqueued for publishing", event.GetId())
+		p.logger.Debugf("Event %s enqueued for publishing", eventID)
 		return true
 	default:
 		p.closeMu.Unlock()
-		p.logger.Warnf("Queue full, dropping event %s", event.GetId())
+		p.logger.Warnf("Queue full, dropping event %s", eventID)
 		return false
 	}
 }

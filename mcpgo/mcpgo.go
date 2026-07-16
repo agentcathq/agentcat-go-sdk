@@ -81,6 +81,16 @@ type Options struct {
 	// RedactSensitiveInformation redacts sensitive data before sending to AgentCat.
 	RedactSensitiveInformation func(text string) string
 
+	// RedactEvent is the event-level redaction hook, invoked with the full
+	// event (inspect ResourceName, EventType, Parameters, Response, etc.)
+	// before it is published. Return a modified event, or nil to drop the
+	// event entirely. Runs before RedactSensitiveInformation, so it sees
+	// raw, unredacted values. The system-managed fields Id, SessionId,
+	// ProjectId, EventType, and Timestamp cannot be changed. If the hook
+	// returns an error or panics, the event is dropped and the error is
+	// logged.
+	RedactEvent func(event *agentcat.Event) (*agentcat.Event, error)
+
 	// DisableDiagnostics disables AgentCat's internal SDK diagnostics. On by default;
 	// also disable via the DISABLE_DIAGNOSTICS env var. ~/agentcat.log is unaffected.
 	DisableDiagnostics bool
@@ -149,6 +159,7 @@ func Track(mcpServer *server.MCPServer, projectID string, opts *Options) (func(c
 		CustomContextDescription:   opts.CustomContextDescription,
 		Debug:                      opts.Debug,
 		RedactSensitiveInformation: opts.RedactSensitiveInformation,
+		RedactEvent:                opts.RedactEvent,
 		DisableDiagnostics:         opts.DisableDiagnostics,
 		APIBaseURL:                 apiBaseURL,
 		Exporters:                  opts.Exporters,
@@ -163,7 +174,7 @@ func Track(mcpServer *server.MCPServer, projectID string, opts *Options) (func(c
 	agentcat.RegisterServer(mcpServer, instance)
 	agentcat.SetDebug(opts.Debug)
 
-	publishFn := agentcat.InitPublisher(opts.RedactSensitiveInformation, apiBaseURL, opts.Exporters)
+	publishFn := agentcat.InitPublisher(opts.RedactSensitiveInformation, opts.RedactEvent, apiBaseURL, opts.Exporters)
 
 	sessionMap := addTracingToHooks(hooks, opts, publishFn)
 	registerGetMoreToolsIfEnabled(mcpServer, coreOpts)
