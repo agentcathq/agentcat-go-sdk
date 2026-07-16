@@ -7,7 +7,7 @@ import (
 
 func TestNew_APIBaseURL(t *testing.T) {
 	t.Run("uses default URL when apiBaseURL is empty", func(t *testing.T) {
-		p := New(nil, "")
+		p := New(nil, nil, "")
 		defer p.Shutdown(context.Background())
 
 		if p == nil {
@@ -28,7 +28,7 @@ func TestNew_APIBaseURL(t *testing.T) {
 
 	t.Run("uses custom URL when apiBaseURL is provided", func(t *testing.T) {
 		customURL := "https://custom.api.example.com"
-		p := New(nil, customURL)
+		p := New(nil, nil, customURL)
 		defer p.Shutdown(context.Background())
 
 		if p == nil {
@@ -52,7 +52,7 @@ func TestGetOrInit_APIBaseURL(t *testing.T) {
 
 	t.Run("passes custom URL through to New", func(t *testing.T) {
 		customURL := "https://custom.getinit.example.com"
-		p := GetOrInit(nil, customURL)
+		p := GetOrInit(nil, nil, customURL)
 		defer ShutdownGlobal(context.Background())
 
 		if p == nil {

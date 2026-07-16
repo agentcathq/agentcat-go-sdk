@@ -19,11 +19,11 @@ var (
 // GetOrInit returns the global publisher, creating it on first call.
 // Unlike sync.Once, this allows re-initialization after ShutdownGlobal.
 // If apiBaseURL is empty, the default MCPCat API URL is used.
-func GetOrInit(redactFn core.RedactFunc, apiBaseURL string) *Publisher {
+func GetOrInit(redactFn core.RedactFunc, redactEventFn core.RedactEventFunc, apiBaseURL string) *Publisher {
 	globalMu.Lock()
 	defer globalMu.Unlock()
 	if globalPub == nil {
-		globalPub = New(redactFn, apiBaseURL)
+		globalPub = New(redactFn, redactEventFn, apiBaseURL)
 	}
 	return globalPub
 }
@@ -44,20 +44,21 @@ func ShutdownGlobal(ctx context.Context) error {
 
 // Publisher handles asynchronous event publishing to the MCPCat API.
 type Publisher struct {
-	queue        chan *core.Event
-	apiClient    *agentcatapi.APIClient
-	logger       *logging.Logger
-	redactFn     core.RedactFunc
-	wg           sync.WaitGroup
-	closeMu      sync.Mutex
-	closed       bool
-	shutdownCh   chan struct{}
-	shutdownOnce sync.Once
+	queue         chan *core.Event
+	apiClient     *agentcatapi.APIClient
+	logger        *logging.Logger
+	redactFn      core.RedactFunc
+	redactEventFn core.RedactEventFunc
+	wg            sync.WaitGroup
+	closeMu       sync.Mutex
+	closed        bool
+	shutdownCh    chan struct{}
+	shutdownOnce  sync.Once
 }
 
 // New creates a new Publisher instance and starts worker goroutines.
 // If apiBaseURL is empty, the default MCPCat API URL is used.
-func New(redactFn core.RedactFunc, apiBaseURL string) *Publisher {
+func New(redactFn core.RedactFunc, redactEventFn core.RedactEventFunc, apiBaseURL string) *Publisher {
 	logger := logging.New()
 
 	baseURL := DefaultAPIBaseURL
@@ -76,11 +77,12 @@ func New(redactFn core.RedactFunc, apiBaseURL string) *Publisher {
 	apiClient := agentcatapi.NewAPIClient(cfg)
 
 	p := &Publisher{
-		queue:      make(chan *core.Event, QueueSize),
-		apiClient:  apiClient,
-		logger:     logger,
-		redactFn:   redactFn,
-		shutdownCh: make(chan struct{}),
+		queue:         make(chan *core.Event, QueueSize),
+		apiClient:     apiClient,
+		logger:        logger,
+		redactFn:      redactFn,
+		redactEventFn: redactEventFn,
+		shutdownCh:    make(chan struct{}),
 	}
 
 	for i := 0; i < MaxWorkers; i++ {
@@ -111,6 +113,19 @@ func (p *Publisher) worker(id int) {
 
 // publishEvent sends a single event to the MCPCat API.
 func (p *Publisher) publishEvent(event *core.Event, workerID int) {
+	if p.redactEventFn != nil {
+		kept, err := redaction.ApplyEventRedaction(event, p.redactEventFn)
+		if err != nil {
+			p.logger.Warnf("Worker %d failed to redact event %s (event-level hook), dropping event: %v",
+				workerID, event.GetId(), err)
+			return
+		}
+		if !kept {
+			p.logger.Debugf("Worker %d event %s dropped by RedactEvent hook", workerID, event.GetId())
+			return
+		}
+	}
+
 	if p.redactFn != nil {
 		err := redaction.RedactEvent(event, p.redactFn)
 		if err != nil {
@@ -153,21 +168,26 @@ func (p *Publisher) Publish(event *core.Event) bool {
 		return false
 	}
 
+	// Capture the id before enqueueing: once the event is handed to the queue
+	// a worker owns it (and may rewrite it via the event-level redaction
+	// hook), so the producer must not read it afterwards.
+	eventID := event.GetId()
+
 	p.closeMu.Lock()
 	if p.closed {
 		p.closeMu.Unlock()
-		p.logger.Warnf("Publish rejected (shutting down), dropping event %s", event.GetId())
+		p.logger.Warnf("Publish rejected (shutting down), dropping event %s", eventID)
 		return false
 	}
 
 	select {
 	case p.queue <- event:
 		p.closeMu.Unlock()
-		p.logger.Debugf("Event %s enqueued for publishing", event.GetId())
+		p.logger.Debugf("Event %s enqueued for publishing", eventID)
 		return true
 	default:
 		p.closeMu.Unlock()
-		p.logger.Warnf("Queue full, dropping event %s", event.GetId())
+		p.logger.Warnf("Queue full, dropping event %s", eventID)
 		return false
 	}
 }

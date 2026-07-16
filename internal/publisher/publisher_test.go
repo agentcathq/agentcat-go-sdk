@@ -2,6 +2,9 @@ package publisher
 
 import (
 	"context"
+	"errors"
+	"net/http"
+	"net/http/httptest"
 	"sync"
 	"sync/atomic"
 	"testing"
@@ -18,7 +21,7 @@ func strPtr(s string) *string {
 
 func TestNew(t *testing.T) {
 	t.Run("creates publisher with default configuration", func(t *testing.T) {
-		p := New(nil, "")
+		p := New(nil, nil, "")
 		defer p.Shutdown(context.Background())
 
 		if p == nil {
@@ -43,7 +46,7 @@ func TestNew(t *testing.T) {
 
 	t.Run("creates publisher with redact function", func(t *testing.T) {
 		redactFn := func(s string) string { return "***" }
-		p := New(redactFn, "")
+		p := New(redactFn, nil, "")
 		defer p.Shutdown(context.Background())
 
 		if p.redactFn == nil {
@@ -52,7 +55,7 @@ func TestNew(t *testing.T) {
 	})
 
 	t.Run("starts workers", func(t *testing.T) {
-		p := New(nil, "")
+		p := New(nil, nil, "")
 		defer p.Shutdown(context.Background())
 
 		time.Sleep(50 * time.Millisecond)
@@ -73,7 +76,7 @@ func TestNew(t *testing.T) {
 
 func TestPublish(t *testing.T) {
 	t.Run("successfully enqueues event", func(t *testing.T) {
-		p := New(nil, "")
+		p := New(nil, nil, "")
 		defer p.Shutdown(context.Background())
 
 		event := &core.Event{
@@ -96,7 +99,7 @@ func TestPublish(t *testing.T) {
 	})
 
 	t.Run("handles nil event gracefully", func(t *testing.T) {
-		p := New(nil, "")
+		p := New(nil, nil, "")
 		defer p.Shutdown(context.Background())
 
 		ok := p.Publish(nil)
@@ -130,7 +133,7 @@ func TestPublish(t *testing.T) {
 	})
 
 	t.Run("rejects events after shutdown", func(t *testing.T) {
-		p := New(nil, "")
+		p := New(nil, nil, "")
 		p.Shutdown(context.Background())
 
 		ok := p.Publish(makeEvent("after.shutdown"))
@@ -140,7 +143,7 @@ func TestPublish(t *testing.T) {
 	})
 
 	t.Run("handles concurrent publishing", func(t *testing.T) {
-		p := New(nil, "")
+		p := New(nil, nil, "")
 		defer p.Shutdown(context.Background())
 
 		var wg sync.WaitGroup
@@ -164,7 +167,7 @@ func TestPublish(t *testing.T) {
 
 func TestPublishEvent(t *testing.T) {
 	t.Run("does not panic on publish", func(t *testing.T) {
-		p := New(nil, "")
+		p := New(nil, nil, "")
 		defer p.Shutdown(context.Background())
 
 		event := &core.Event{
@@ -182,7 +185,7 @@ func TestPublishEvent(t *testing.T) {
 				return "***"
 			}
 			return s
-		}, "")
+		}, nil, "")
 		defer p.Shutdown(context.Background())
 
 		event := &core.Event{
@@ -204,7 +207,7 @@ func TestPublishEvent(t *testing.T) {
 	t.Run("handles redaction errors gracefully", func(t *testing.T) {
 		p := New(func(s string) string {
 			panic("redaction panic")
-		}, "")
+		}, nil, "")
 		defer p.Shutdown(context.Background())
 
 		event := &core.Event{
@@ -229,8 +232,120 @@ func TestPublishEvent(t *testing.T) {
 		}
 	})
 
+	t.Run("event-level hook runs before string redaction and composes", func(t *testing.T) {
+		var rawSeen string
+		p := New(
+			func(s string) string {
+				if s == "raw secret (reviewed)" {
+					return "[STRING-REDACTED]"
+				}
+				return s
+			},
+			func(e *core.Event) (*core.Event, error) {
+				rawSeen = e.Parameters["data"].(string)
+				modified := *e
+				modified.Parameters = map[string]any{"data": rawSeen + " (reviewed)"}
+				return &modified, nil
+			},
+			"")
+		defer p.Shutdown(context.Background())
+
+		event := &core.Event{
+			PublishEventRequest: agentcatapi.PublishEventRequest{
+				EventType: strPtr("test.hook.order"),
+				Parameters: map[string]any{
+					"data": "raw secret",
+				},
+			},
+		}
+
+		p.publishEvent(event, 0)
+
+		if rawSeen != "raw secret" {
+			t.Errorf("event hook saw %q, want the raw pre-redaction value", rawSeen)
+		}
+		if got := event.Parameters["data"]; got != "[STRING-REDACTED]" {
+			t.Errorf("Parameters[data] = %v, want string redaction applied to the hook's output", got)
+		}
+	})
+
+	t.Run("event-level hook returning nil drops the event before send", func(t *testing.T) {
+		var requests int32
+		srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			atomic.AddInt32(&requests, 1)
+			w.WriteHeader(http.StatusOK)
+			_, _ = w.Write([]byte("{}"))
+		}))
+		defer srv.Close()
+
+		p := New(nil, func(e *core.Event) (*core.Event, error) {
+			return nil, nil
+		}, srv.URL)
+		defer p.Shutdown(context.Background())
+
+		event := &core.Event{
+			PublishEventRequest: agentcatapi.PublishEventRequest{
+				EventType: strPtr("test.hook.drop"),
+			},
+		}
+
+		p.publishEvent(event, 0)
+
+		if n := atomic.LoadInt32(&requests); n != 0 {
+			t.Errorf("API received %d requests, want 0 (event dropped)", n)
+		}
+	})
+
+	t.Run("event-level hook error drops the event before send", func(t *testing.T) {
+		var requests int32
+		srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			atomic.AddInt32(&requests, 1)
+			w.WriteHeader(http.StatusOK)
+			_, _ = w.Write([]byte("{}"))
+		}))
+		defer srv.Close()
+
+		p := New(nil, func(e *core.Event) (*core.Event, error) {
+			return nil, errors.New("hook failure")
+		}, srv.URL)
+		defer p.Shutdown(context.Background())
+
+		event := &core.Event{
+			PublishEventRequest: agentcatapi.PublishEventRequest{
+				EventType: strPtr("test.hook.error"),
+			},
+		}
+
+		p.publishEvent(event, 0)
+
+		if n := atomic.LoadInt32(&requests); n != 0 {
+			t.Errorf("API received %d requests, want 0 (event dropped)", n)
+		}
+	})
+
+	t.Run("event-level hook panic drops the event without crashing", func(t *testing.T) {
+		p := New(nil, func(e *core.Event) (*core.Event, error) {
+			panic("hook exploded")
+		}, "")
+		defer p.Shutdown(context.Background())
+
+		event := &core.Event{
+			PublishEventRequest: agentcatapi.PublishEventRequest{
+				EventType: strPtr("test.hook.panic"),
+			},
+		}
+
+		defer func() {
+			if r := recover(); r != nil {
+				t.Errorf("publishEvent panicked: %v", r)
+			}
+		}()
+
+		p.publishEvent(event, 0)
+	})
+
 	t.Run("handles API errors without panicking", func(t *testing.T) {
-		p := New(nil, "")
+		p := New(nil, nil, "")
 		defer p.Shutdown(context.Background())
 
 		event := &core.Event{
@@ -249,7 +364,7 @@ func TestPublishEvent(t *testing.T) {
 	})
 
 	t.Run("respects context timeout", func(t *testing.T) {
-		p := New(nil, "")
+		p := New(nil, nil, "")
 		defer p.Shutdown(context.Background())
 
 		event := &core.Event{
@@ -274,7 +389,7 @@ func TestPublishEvent(t *testing.T) {
 
 func TestShutdown(t *testing.T) {
 	t.Run("shuts down cleanly with empty queue", func(t *testing.T) {
-		p := New(nil, "")
+		p := New(nil, nil, "")
 
 		if err := p.Shutdown(context.Background()); err != nil {
 			t.Errorf("Shutdown returned error: %v", err)
@@ -288,7 +403,7 @@ func TestShutdown(t *testing.T) {
 	})
 
 	t.Run("drains queue before shutdown completes", func(t *testing.T) {
-		p := New(nil, "")
+		p := New(nil, nil, "")
 
 		for i := 0; i < 5; i++ {
 			p.Publish(makeEvent("test.shutdown"))
@@ -330,7 +445,7 @@ func TestShutdown(t *testing.T) {
 	})
 
 	t.Run("can be called multiple times safely", func(t *testing.T) {
-		p := New(nil, "")
+		p := New(nil, nil, "")
 
 		p.Shutdown(context.Background())
 		p.Shutdown(context.Background())
@@ -338,7 +453,7 @@ func TestShutdown(t *testing.T) {
 	})
 
 	t.Run("rejects new events after shutdown", func(t *testing.T) {
-		p := New(nil, "")
+		p := New(nil, nil, "")
 		p.Shutdown(context.Background())
 
 		ok := p.Publish(makeEvent("test.after.shutdown"))
@@ -350,7 +465,7 @@ func TestShutdown(t *testing.T) {
 
 func TestWorker(t *testing.T) {
 	t.Run("processes events from queue", func(t *testing.T) {
-		p := New(nil, "")
+		p := New(nil, nil, "")
 		defer p.Shutdown(context.Background())
 
 		p.Publish(makeEvent("test.worker"))
@@ -527,14 +642,14 @@ func TestGetOrInit_Resettable(t *testing.T) {
 	globalPub = nil
 	globalMu.Unlock()
 
-	p1 := GetOrInit(nil, "")
+	p1 := GetOrInit(nil, nil, "")
 	if p1 == nil {
 		t.Fatal("GetOrInit returned nil")
 	}
 
 	ShutdownGlobal(context.Background())
 
-	p2 := GetOrInit(nil, "")
+	p2 := GetOrInit(nil, nil, "")
 	if p2 == nil {
 		t.Fatal("GetOrInit returned nil after reset")
 	}

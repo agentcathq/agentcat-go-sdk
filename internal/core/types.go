@@ -21,6 +21,11 @@ type UserIdentity struct {
 // RedactFunc redacts sensitive information from text before it is sent upstream
 type RedactFunc func(text string) string
 
+// RedactEventFunc is the event-level redaction hook. It receives the full
+// event before it is published and returns a modified event, or nil to drop
+// the event entirely. A non-nil error also drops the event and is logged.
+type RedactEventFunc func(event *Event) (*Event, error)
+
 // Exporter is an interface for telemetry exporters that forward events
 // to external systems.
 type Exporter interface {
@@ -51,6 +56,16 @@ type Options struct {
 
 	// RedactSensitiveInformation redacts sensitive data before sending to MCPCat.
 	RedactSensitiveInformation RedactFunc
+
+	// RedactEvent is the event-level redaction hook, invoked with the full
+	// event (inspect ResourceName, EventType, Parameters, Response, etc.)
+	// before it is published. Return a modified event, or nil to drop the
+	// event entirely. Runs before RedactSensitiveInformation, so it sees
+	// raw, unredacted values. The system-managed fields Id, SessionId,
+	// ProjectId, EventType, and Timestamp cannot be changed. If the hook
+	// returns an error or panics, the event is dropped and the error is
+	// logged.
+	RedactEvent RedactEventFunc
 
 	// Exporters configure telemetry exporters to send events to external systems.
 	// Available exporters: otlp, datadog, sentry (TODO: implement in future).
