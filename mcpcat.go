@@ -41,8 +41,8 @@ func UnregisterServer(server any) {
 // InitPublisher initializes the global event publisher and returns a publish function.
 // The returned function can be called to publish events asynchronously.
 // If apiBaseURL is empty, the default MCPCat API URL is used.
-func InitPublisher(redactFn RedactFunc, apiBaseURL string) func(evt *Event) {
-	pub := publisher.GetOrInit(redactFn, apiBaseURL)
+func InitPublisher(redactFn RedactFunc, redactEventFn RedactEventFunc, apiBaseURL string) func(evt *Event) {
+	pub := publisher.GetOrInit(redactFn, redactEventFn, apiBaseURL)
 	return func(evt *Event) {
 		if evt != nil {
 			pub.Publish(evt)

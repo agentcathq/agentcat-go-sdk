@@ -130,6 +130,26 @@ shutdown, err := agentcat.Track(s, "proj_YOUR_PROJECT_ID", &agentcat.Options{
 })
 ```
 
+For redaction decisions that need more context than a single string — such as which tool was called or what type of event is being published — use the event-level `RedactEvent` hook. It receives the full event object and returns a modified event, or `nil` to drop the event entirely. It can be combined with `RedactSensitiveInformation`.
+
+```go
+shutdown, err := agentcat.Track(s, "proj_YOUR_PROJECT_ID", &agentcat.Options{
+    RedactEvent: func(event *agentcat.Event) (*agentcat.Event, error) {
+        // Drop events from tools that handle secrets entirely
+        if event.GetResourceName() == "get_credentials" {
+            return nil, nil
+        }
+        // Strip response payloads from a specific tool
+        if event.GetResourceName() == "export_report" {
+            event.Response = nil
+        }
+        return event, nil
+    },
+})
+```
+
+When both hooks are configured, `RedactEvent` runs first and sees the raw, unredacted values; `RedactSensitiveInformation` then runs on its output as a final string-level scrub. The system-managed fields `Id`, `SessionId`, `ProjectId`, `EventType`, and `Timestamp` cannot be changed by the hook, and if the hook returns an error or panics, the event is dropped.
+
 ### Debug Mode
 
 Enable debug logging for troubleshooting. Debug logs are written to `~/mcpcat.log`.
@@ -167,6 +187,7 @@ Diagnostics are on by default and can be turned off completely with either:
 | `DisableToolCallContext` | `bool` | `false` | When `true`, prevents the `context` parameter from being injected on tool calls |
 | `Debug` | `bool` | `false` | Enable debug logging to `~/mcpcat.log` |
 | `RedactSensitiveInformation` | `func(string) string` | `nil` | Custom redaction applied to all text data before sending |
+| `RedactEvent` | `func(*Event) (*Event, error)` | `nil` | Event-level redaction hook; rewrite the full event or return `nil` to drop it |
 | `Identify` | callback | `nil` | Attach user information to sessions |
 | `Hooks` | `*server.Hooks` | `nil` | Pre-existing hooks to merge with (mcp-go only) |
 

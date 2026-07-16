@@ -56,7 +56,7 @@ func TestInitPublisher(t *testing.T) {
 	// Ensure clean state
 	publisher.ShutdownGlobal(context.Background())
 
-	publishFn := InitPublisher(nil, "")
+	publishFn := InitPublisher(nil, nil, "")
 	defer Shutdown(context.Background())
 
 	if publishFn == nil {
@@ -75,7 +75,7 @@ func TestInitPublisher_WithRedactFunc(t *testing.T) {
 	publisher.ShutdownGlobal(context.Background())
 
 	redactFn := func(s string) string { return "***" }
-	publishFn := InitPublisher(redactFn, "")
+	publishFn := InitPublisher(redactFn, nil, "")
 	defer Shutdown(context.Background())
 
 	if publishFn == nil {
@@ -86,7 +86,7 @@ func TestInitPublisher_WithRedactFunc(t *testing.T) {
 func TestShutdown(t *testing.T) {
 	publisher.ShutdownGlobal(context.Background())
 
-	_ = InitPublisher(nil, "")
+	_ = InitPublisher(nil, nil, "")
 
 	err := Shutdown(context.Background())
 	if err != nil {

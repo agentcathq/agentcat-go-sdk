@@ -11,6 +11,7 @@ type (
 	UserIdentity     = core.UserIdentity
 	Options          = core.Options
 	RedactFunc       = core.RedactFunc
+	RedactEventFunc  = core.RedactEventFunc
 	Exporter         = core.Exporter
 	ExporterConfig   = core.ExporterConfig
 	Event            = core.Event
