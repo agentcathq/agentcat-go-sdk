@@ -35,7 +35,7 @@ func TestInit_DisabledUnderGoTest_WhenEnvUnset(t *testing.T) {
 		t.Fatal("diagnostics must be auto-disabled under go test when DISABLE_DIAGNOSTICS is unset")
 	}
 
-	capture(logging.LevelInfo, "MCPCat setup started | proj_x")
+	capture(logging.LevelInfo, "AgentCat setup started | proj_x")
 	Flush()
 
 	if n := atomic.LoadInt32(&hits); n != 0 {

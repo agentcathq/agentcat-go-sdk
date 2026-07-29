@@ -50,8 +50,8 @@ func TestTrack_EmitsSetupBeacons(t *testing.T) {
 	}
 
 	body := drain(ch)
-	if !strings.Contains(body, "MCPCat setup started") ||
-		!strings.Contains(body, "MCPCat setup complete") ||
+	if !strings.Contains(body, "AgentCat setup started") ||
+		!strings.Contains(body, "AgentCat setup complete") ||
 		!strings.Contains(body, "proj_test") ||
 		!strings.Contains(body, "integration officialsdk") {
 		t.Fatalf("beacons missing in diagnostics body:\n%s", body)
@@ -73,7 +73,7 @@ func TestTrack_EmptyProjectIDLogsError(t *testing.T) {
 	_ = agentcat.Shutdown(context.Background()) // flush
 
 	body := drain(ch)
-	if !strings.Contains(body, "MCPCat setup failed") {
+	if !strings.Contains(body, "AgentCat setup failed") {
 		t.Fatalf("expected setup-failed record:\n%s", body)
 	}
 }

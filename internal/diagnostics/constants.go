@@ -1,4 +1,4 @@
-// Package diagnostics mirrors the SDK's internal operational logs to MCPCat's
+// Package diagnostics mirrors the SDK's internal operational logs to AgentCat's
 // monitoring as OTLP/HTTP log records. It sends only operational metadata —
 // never event payloads or user data. On by default; opt out via the
 // DisableDiagnostics option or the DISABLE_DIAGNOSTICS env var.
@@ -8,7 +8,7 @@ import "time"
 
 const (
 	// DiagnosticsScopeName is the OTLP instrumentation scope name.
-	DiagnosticsScopeName = "mcpcat-diagnostics"
+	DiagnosticsScopeName = "agentcat-diagnostics"
 
 	// DefaultDiagnosticsEndpoint is the OTLP collector base URL. The POST path
 	// /v1/logs is appended by resolveEndpoint. Override with DIAGNOSTICS_ENDPOINT.

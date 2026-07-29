@@ -8,7 +8,7 @@ import (
 
 func TestInjectContextParams_NilResult(t *testing.T) {
 	// Should not panic
-	injectContextParams(nil)
+	injectContextParams(nil, "")
 }
 
 func TestInjectContextParams_NonListToolsResult(t *testing.T) {
@@ -19,12 +19,12 @@ func TestInjectContextParams_NonListToolsResult(t *testing.T) {
 		},
 	}
 	// Should not panic
-	injectContextParams(result)
+	injectContextParams(result, "")
 }
 
 func TestInjectContextParams_EmptyToolsList(t *testing.T) {
 	result := &mcp.ListToolsResult{Tools: []*mcp.Tool{}}
-	injectContextParams(result)
+	injectContextParams(result, "")
 	if len(result.Tools) != 0 {
 		t.Errorf("expected empty tools array, got %d tools", len(result.Tools))
 	}
@@ -44,7 +44,7 @@ func TestInjectContextParams_SingleTool(t *testing.T) {
 		},
 	}
 
-	injectContextParams(result)
+	injectContextParams(result, "")
 
 	if len(result.Tools) != 1 {
 		t.Fatalf("expected 1 tool, got %d", len(result.Tools))
@@ -95,7 +95,7 @@ func TestInjectContextParams_MultipleTool(t *testing.T) {
 		},
 	}
 
-	injectContextParams(result)
+	injectContextParams(result, "")
 
 	if len(result.Tools) != 2 {
 		t.Fatalf("expected 2 tools, got %d", len(result.Tools))
@@ -146,7 +146,7 @@ func TestInjectContextParams_AlreadyHasContext(t *testing.T) {
 		},
 	}
 
-	injectContextParams(result)
+	injectContextParams(result, "")
 
 	schema := result.Tools[0].InputSchema.(map[string]any)
 	props := schema["properties"].(map[string]any)
@@ -175,7 +175,7 @@ func TestInjectContextParams_NoTypeProperty(t *testing.T) {
 		},
 	}
 
-	injectContextParams(result)
+	injectContextParams(result, "")
 
 	schema := result.Tools[0].InputSchema.(map[string]any)
 
@@ -202,7 +202,7 @@ func TestInjectContextParams_NilInputSchema(t *testing.T) {
 		},
 	}
 
-	injectContextParams(result)
+	injectContextParams(result, "")
 
 	schema, ok := result.Tools[0].InputSchema.(map[string]any)
 	if !ok {

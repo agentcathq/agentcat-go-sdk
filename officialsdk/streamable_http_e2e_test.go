@@ -6,6 +6,7 @@ import (
 	"net/http/httptest"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -137,10 +138,17 @@ func TestHTTP_ErrorToolCall(t *testing.T) {
 }
 
 func TestHTTP_IdentifyInvoked(t *testing.T) {
-	identifyCalled := false
+	// The callback runs on detached capture goroutines (one per captured
+	// event), so the flag must be synchronized with the test goroutine.
+	var identifyCalled atomic.Bool
 	opts := DefaultOptions()
-	opts.Identify = func(ctx context.Context, request *mcp.CallToolRequest) *agentcat.UserIdentity {
-		identifyCalled = true
+	opts.Identify = func(ctx context.Context, request mcp.Request) *agentcat.UserIdentity {
+		// Gate to tool calls so initialize/notification captures do not emit
+		// identify events (waitForEvents below counts on exactly one).
+		if _, ok := request.(*mcp.CallToolRequest); !ok {
+			return nil
+		}
+		identifyCalled.Store(true)
 		return &agentcat.UserIdentity{
 			UserID:   "http_user_789",
 			UserName: "HTTP E2E User",
@@ -162,13 +170,13 @@ func TestHTTP_IdentifyInvoked(t *testing.T) {
 	// Wait for events: init + notifications/initialized + identify + tool call
 	events := mock.waitForEvents(4, 3*time.Second)
 
-	if !identifyCalled {
+	if !identifyCalled.Load() {
 		t.Error("expected Identify function to be called")
 	}
 
-	identifyEvents := filterEvents(events, "mcpcat:identify")
+	identifyEvents := filterEvents(events, "agentcat:identify")
 	if len(identifyEvents) == 0 {
-		t.Fatal("expected an mcpcat:identify event to be published")
+		t.Fatal("expected an agentcat:identify event to be published")
 	}
 
 	evt := identifyEvents[0]
@@ -181,17 +189,25 @@ func TestHTTP_IdentifyInvoked(t *testing.T) {
 	}
 }
 
-func TestHTTP_IdentifyDedup(t *testing.T) {
+// TestHTTP_IdentifyPublishesEveryTime verifies the identify callback re-runs
+// on every tool call and an agentcat:identify event is published every time it
+// returns a non-nil identity — even when the identity is unchanged.
+func TestHTTP_IdentifyPublishesEveryTime(t *testing.T) {
 	var mu sync.Mutex
 	identifyCount := 0
 	opts := DefaultOptions()
-	opts.Identify = func(ctx context.Context, request *mcp.CallToolRequest) *agentcat.UserIdentity {
+	opts.Identify = func(ctx context.Context, request mcp.Request) *agentcat.UserIdentity {
+		// Count and identify only tool calls so the expected event counts
+		// below stay deterministic.
+		if _, ok := request.(*mcp.CallToolRequest); !ok {
+			return nil
+		}
 		mu.Lock()
 		identifyCount++
 		mu.Unlock()
 		return &agentcat.UserIdentity{
-			UserID:   "dedup_user",
-			UserName: "Dedup User",
+			UserID:   "rerun_user",
+			UserName: "Rerun User",
 		}
 	}
 
@@ -220,14 +236,28 @@ func TestHTTP_IdentifyDedup(t *testing.T) {
 	}
 
 	// Wait for second tool call events
-	mock.waitForEvents(5, 3*time.Second)
+	// (init, notification, 2x tools/call, 2x identify).
+	events := mock.waitForEvents(6, 3*time.Second)
 
 	mu.Lock()
 	count := identifyCount
 	mu.Unlock()
 
-	if count != 1 {
-		t.Errorf("expected Identify to be called exactly once, got %d", count)
+	// The callback re-runs on every tool call.
+	if count != 2 {
+		t.Errorf("expected Identify to be called on each tool call (2), got %d", count)
+	}
+
+	// An identify event is published every time the callback returns a
+	// non-nil identity — no change-detection dedup.
+	identifyEvents := 0
+	for _, evt := range events {
+		if evt.EventType != nil && *evt.EventType == "agentcat:identify" {
+			identifyEvents++
+		}
+	}
+	if identifyEvents != 2 {
+		t.Errorf("expected 2 identify events (one per tool call, no dedup), got %d", identifyEvents)
 	}
 }
 

@@ -13,17 +13,17 @@ func attrMap(attrs []otlpAttribute) map[string]string {
 func TestBuildStaticAttributes_WithProjectID(t *testing.T) {
 	m := attrMap(buildStaticAttributes("proj_123", "officialsdk", "github.com/modelcontextprotocol/go-sdk"))
 
-	if m["mcpcat.project_id"] != "proj_123" {
-		t.Errorf("project_id = %q, want proj_123", m["mcpcat.project_id"])
+	if m["agentcat.project_id"] != "proj_123" {
+		t.Errorf("project_id = %q, want proj_123", m["agentcat.project_id"])
 	}
-	if _, ok := m["mcpcat.install_id"]; ok {
+	if _, ok := m["agentcat.install_id"]; ok {
 		t.Error("install_id must be absent when project_id is set")
 	}
-	if m["mcpcat.sdk.language"] != "go" {
-		t.Errorf("sdk.language = %q, want go", m["mcpcat.sdk.language"])
+	if m["agentcat.sdk.language"] != "go" {
+		t.Errorf("sdk.language = %q, want go", m["agentcat.sdk.language"])
 	}
-	if m["mcpcat.integration"] != "officialsdk" {
-		t.Errorf("integration = %q, want officialsdk", m["mcpcat.integration"])
+	if m["agentcat.integration"] != "officialsdk" {
+		t.Errorf("integration = %q, want officialsdk", m["agentcat.integration"])
 	}
 	if m["os.type"] == "" {
 		t.Error("os.type must be present")
@@ -39,14 +39,14 @@ func TestBuildStaticAttributes_WithProjectID(t *testing.T) {
 func TestBuildStaticAttributes_WithoutProjectID(t *testing.T) {
 	m := attrMap(buildStaticAttributes("", "mcpgo", "github.com/mark3labs/mcp-go"))
 
-	if _, ok := m["mcpcat.project_id"]; ok {
+	if _, ok := m["agentcat.project_id"]; ok {
 		t.Error("project_id must be absent when empty")
 	}
-	if m["mcpcat.install_id"] == "" {
+	if m["agentcat.install_id"] == "" {
 		t.Error("install_id must be present (anonymous) when project_id is empty")
 	}
-	if len(m["mcpcat.install_id"]) != 16 {
-		t.Errorf("install_id must be 16 hex chars, got %q", m["mcpcat.install_id"])
+	if len(m["agentcat.install_id"]) != 16 {
+		t.Errorf("install_id must be 16 hex chars, got %q", m["agentcat.install_id"])
 	}
 }
 

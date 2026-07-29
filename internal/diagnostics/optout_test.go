@@ -128,9 +128,9 @@ func TestInit_Idempotent(t *testing.T) {
 	var projectID, integration string
 	for _, a := range StaticAttributesForTest() {
 		switch a.Key {
-		case "mcpcat.project_id":
+		case "agentcat.project_id":
 			projectID = a.Value.StringValue
-		case "mcpcat.integration":
+		case "agentcat.integration":
 			integration = a.Value.StringValue
 		}
 	}

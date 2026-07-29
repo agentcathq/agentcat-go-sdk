@@ -4,6 +4,7 @@ import (
 	"context"
 	"io"
 	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -174,10 +175,12 @@ func TestStdio_ErrorToolCall(t *testing.T) {
 }
 
 func TestStdio_IdentifyInvoked(t *testing.T) {
-	identifyCalled := false
+	// The callback runs on detached capture goroutines (one per captured
+	// event), so the flag must be synchronized with the test goroutine.
+	var identifyCalled atomic.Bool
 	opts := DefaultOptions()
-	opts.Identify = func(ctx context.Context, request *mcp.CallToolRequest) *agentcat.UserIdentity {
-		identifyCalled = true
+	opts.Identify = func(ctx context.Context, request mcp.Request) *agentcat.UserIdentity {
+		identifyCalled.Store(true)
 		return &agentcat.UserIdentity{
 			UserID:   "user_456",
 			UserName: "E2E User",
@@ -199,13 +202,13 @@ func TestStdio_IdentifyInvoked(t *testing.T) {
 	// Wait for events: init + notifications/initialized + identify + tool call
 	events := mock.waitForEvents(4, 3*time.Second)
 
-	if !identifyCalled {
+	if !identifyCalled.Load() {
 		t.Error("expected Identify function to be called")
 	}
 
-	identifyEvents := filterEvents(events, "mcpcat:identify")
+	identifyEvents := filterEvents(events, "agentcat:identify")
 	if len(identifyEvents) == 0 {
-		t.Fatal("expected an mcpcat:identify event to be published")
+		t.Fatal("expected an agentcat:identify event to be published")
 	}
 
 	evt := identifyEvents[0]

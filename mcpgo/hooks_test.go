@@ -96,7 +96,7 @@ func TestOnSuccess_CreatesAndPublishesEvent(t *testing.T) {
 	mcpServer := server.NewMCPServer("test-server", "1.0.0")
 	defer agentcat.UnregisterServer(mcpServer)
 
-	instance := &agentcat.MCPcatInstance{
+	instance := &agentcat.AgentCatInstance{
 		ProjectID: "proj_test",
 		Options: &agentcat.Options{
 			DisableReportMissing:   opts.DisableReportMissing,
@@ -213,7 +213,7 @@ func TestAfterListTools_InjectsContextParams_WhenEnabled(t *testing.T) {
 	mcpServer := server.NewMCPServer("test-server", "1.0.0")
 	defer agentcat.UnregisterServer(mcpServer)
 
-	instance := &agentcat.MCPcatInstance{
+	instance := &agentcat.AgentCatInstance{
 		ProjectID: "proj_test",
 		Options: &agentcat.Options{
 			DisableReportMissing:   opts.DisableReportMissing,
@@ -249,7 +249,7 @@ func TestAfterListTools_InjectsContextParams_WhenEnabled(t *testing.T) {
 
 	// Call the hook - but since we can't easily inject the server into context
 	// using the mcp-go server key, let's test the addContextParamsToToolsList directly
-	addContextParamsToToolsList(result)
+	addContextParamsToToolsList(result, "")
 
 	if len(result.Tools) != 1 {
 		t.Fatalf("expected 1 tool, got %d", len(result.Tools))
@@ -269,7 +269,7 @@ func TestAfterListTools_DoesNotInject_WhenDisabled(t *testing.T) {
 	mcpServer := server.NewMCPServer("test-server", "1.0.0")
 	defer agentcat.UnregisterServer(mcpServer)
 
-	instance := &agentcat.MCPcatInstance{
+	instance := &agentcat.AgentCatInstance{
 		ProjectID: "proj_test",
 		Options: &agentcat.Options{
 			DisableReportMissing:   opts.DisableReportMissing,
@@ -451,7 +451,7 @@ func setupStreamableHTTPWithMock(t *testing.T, opts *Options) (*client.Client, *
 		DisableToolCallContext: opts.DisableToolCallContext,
 		Debug:                  opts.Debug,
 	}
-	instance := &agentcat.MCPcatInstance{
+	instance := &agentcat.AgentCatInstance{
 		ProjectID: projectID,
 		Options:   coreOpts,
 		ServerRef: mcpServer,
@@ -606,7 +606,7 @@ func TestFailingToolCall_HasInAppFrames(t *testing.T) {
 		DisableReportMissing:   true,
 		DisableToolCallContext: true,
 	}
-	agentcat.RegisterServer(mcpServer, &agentcat.MCPcatInstance{
+	agentcat.RegisterServer(mcpServer, &agentcat.AgentCatInstance{
 		ProjectID: "test_project",
 		Options:   coreOpts,
 		ServerRef: mcpServer,

@@ -28,13 +28,30 @@ type stackTracer interface {
 }
 
 // CaptureException converts a Go error into a structured error map matching the
-// MCPCat ErrorData schema (message, type, stack, frames, chained_errors, platform).
-func CaptureException(err error) map[string]any {
+// AgentCat ErrorData schema (message, type, stack, frames, chained_errors, platform).
+//
+// It never panics: user-defined error types can misbehave (Error() panicking,
+// unhashable dynamic types breaking the cycle-detection maps, circular Unwrap
+// chains), so any panic is recovered and a minimal fallback map is returned.
+func CaptureException(err error) (result map[string]any) {
 	if err == nil {
 		return nil
 	}
 
-	result := map[string]any{
+	defer func() {
+		if r := recover(); r != nil && result == nil {
+			// Panicked before the base fields were built (e.g. Error() itself
+			// panicked): return a minimal fallback. If the base map was already
+			// built, the partial result is kept as-is.
+			result = map[string]any{
+				"message":  fmt.Sprintf("[error capture failed: %v]", r),
+				"type":     fmt.Sprintf("%T", err),
+				"platform": platform,
+			}
+		}
+	}()
+
+	result = map[string]any{
 		"message":  truncateMessage(err.Error()),
 		"type":     fmt.Sprintf("%T", err),
 		"platform": platform,

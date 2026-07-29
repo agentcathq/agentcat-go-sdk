@@ -350,19 +350,21 @@ func TestConcurrentTouchAndEvict(t *testing.T) {
 	}
 }
 
-func TestProtectedSession_IdentifyOnce(t *testing.T) {
+func TestProtectedSession_IdentityStorage(t *testing.T) {
 	ps := newProtectedSession("sess-1")
 
-	callCount := 0
-	for i := 0; i < 10; i++ {
-		ps.IdentifyOnce.Do(func() {
-			callCount++
-		})
+	ps.Mu.Lock()
+	if ps.Identity != nil {
+		t.Error("new session should have nil identity")
 	}
+	ps.Identity = &core.UserIdentity{UserID: "u1"}
+	ps.Mu.Unlock()
 
-	if callCount != 1 {
-		t.Errorf("IdentifyOnce ran %d times, want exactly 1", callCount)
+	ps.Mu.Lock()
+	if ps.Identity == nil || ps.Identity.UserID != "u1" {
+		t.Errorf("identity not stored: %+v", ps.Identity)
 	}
+	ps.Mu.Unlock()
 }
 
 func TestProtectedSession_MuProtectsConcurrentAccess(t *testing.T) {

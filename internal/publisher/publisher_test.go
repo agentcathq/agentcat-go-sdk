@@ -2,6 +2,7 @@ package publisher
 
 import (
 	"context"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"testing"
@@ -18,7 +19,7 @@ func strPtr(s string) *string {
 
 func TestNew(t *testing.T) {
 	t.Run("creates publisher with default configuration", func(t *testing.T) {
-		p := New(nil, "")
+		p := New(nil, "", nil)
 		defer p.Shutdown(context.Background())
 
 		if p == nil {
@@ -43,7 +44,7 @@ func TestNew(t *testing.T) {
 
 	t.Run("creates publisher with redact function", func(t *testing.T) {
 		redactFn := func(s string) string { return "***" }
-		p := New(redactFn, "")
+		p := New(redactFn, "", nil)
 		defer p.Shutdown(context.Background())
 
 		if p.redactFn == nil {
@@ -52,7 +53,7 @@ func TestNew(t *testing.T) {
 	})
 
 	t.Run("starts workers", func(t *testing.T) {
-		p := New(nil, "")
+		p := New(nil, "", nil)
 		defer p.Shutdown(context.Background())
 
 		time.Sleep(50 * time.Millisecond)
@@ -73,7 +74,7 @@ func TestNew(t *testing.T) {
 
 func TestPublish(t *testing.T) {
 	t.Run("successfully enqueues event", func(t *testing.T) {
-		p := New(nil, "")
+		p := New(nil, "", nil)
 		defer p.Shutdown(context.Background())
 
 		event := &core.Event{
@@ -96,7 +97,7 @@ func TestPublish(t *testing.T) {
 	})
 
 	t.Run("handles nil event gracefully", func(t *testing.T) {
-		p := New(nil, "")
+		p := New(nil, "", nil)
 		defer p.Shutdown(context.Background())
 
 		ok := p.Publish(nil)
@@ -130,7 +131,7 @@ func TestPublish(t *testing.T) {
 	})
 
 	t.Run("rejects events after shutdown", func(t *testing.T) {
-		p := New(nil, "")
+		p := New(nil, "", nil)
 		p.Shutdown(context.Background())
 
 		ok := p.Publish(makeEvent("after.shutdown"))
@@ -140,7 +141,7 @@ func TestPublish(t *testing.T) {
 	})
 
 	t.Run("handles concurrent publishing", func(t *testing.T) {
-		p := New(nil, "")
+		p := New(nil, "", nil)
 		defer p.Shutdown(context.Background())
 
 		var wg sync.WaitGroup
@@ -164,7 +165,8 @@ func TestPublish(t *testing.T) {
 
 func TestPublishEvent(t *testing.T) {
 	t.Run("does not panic on publish", func(t *testing.T) {
-		p := New(nil, "")
+		p := New(nil, "", nil)
+		p.maxRetries = 0 // avoid retry backoff against the real API in tests
 		defer p.Shutdown(context.Background())
 
 		event := &core.Event{
@@ -182,7 +184,8 @@ func TestPublishEvent(t *testing.T) {
 				return "***"
 			}
 			return s
-		}, "")
+		}, "", nil)
+		p.maxRetries = 0
 		defer p.Shutdown(context.Background())
 
 		event := &core.Event{
@@ -204,7 +207,8 @@ func TestPublishEvent(t *testing.T) {
 	t.Run("handles redaction errors gracefully", func(t *testing.T) {
 		p := New(func(s string) string {
 			panic("redaction panic")
-		}, "")
+		}, "", nil)
+		p.maxRetries = 0
 		defer p.Shutdown(context.Background())
 
 		event := &core.Event{
@@ -230,7 +234,8 @@ func TestPublishEvent(t *testing.T) {
 	})
 
 	t.Run("handles API errors without panicking", func(t *testing.T) {
-		p := New(nil, "")
+		p := New(nil, "", nil)
+		p.maxRetries = 0
 		defer p.Shutdown(context.Background())
 
 		event := &core.Event{
@@ -249,7 +254,8 @@ func TestPublishEvent(t *testing.T) {
 	})
 
 	t.Run("respects context timeout", func(t *testing.T) {
-		p := New(nil, "")
+		p := New(nil, "", nil)
+		p.maxRetries = 0
 		defer p.Shutdown(context.Background())
 
 		event := &core.Event{
@@ -274,7 +280,7 @@ func TestPublishEvent(t *testing.T) {
 
 func TestShutdown(t *testing.T) {
 	t.Run("shuts down cleanly with empty queue", func(t *testing.T) {
-		p := New(nil, "")
+		p := New(nil, "", nil)
 
 		if err := p.Shutdown(context.Background()); err != nil {
 			t.Errorf("Shutdown returned error: %v", err)
@@ -288,7 +294,7 @@ func TestShutdown(t *testing.T) {
 	})
 
 	t.Run("drains queue before shutdown completes", func(t *testing.T) {
-		p := New(nil, "")
+		p := New(nil, "", nil)
 
 		for i := 0; i < 5; i++ {
 			p.Publish(makeEvent("test.shutdown"))
@@ -330,7 +336,7 @@ func TestShutdown(t *testing.T) {
 	})
 
 	t.Run("can be called multiple times safely", func(t *testing.T) {
-		p := New(nil, "")
+		p := New(nil, "", nil)
 
 		p.Shutdown(context.Background())
 		p.Shutdown(context.Background())
@@ -338,7 +344,7 @@ func TestShutdown(t *testing.T) {
 	})
 
 	t.Run("rejects new events after shutdown", func(t *testing.T) {
-		p := New(nil, "")
+		p := New(nil, "", nil)
 		p.Shutdown(context.Background())
 
 		ok := p.Publish(makeEvent("test.after.shutdown"))
@@ -350,7 +356,7 @@ func TestShutdown(t *testing.T) {
 
 func TestWorker(t *testing.T) {
 	t.Run("processes events from queue", func(t *testing.T) {
-		p := New(nil, "")
+		p := New(nil, "", nil)
 		defer p.Shutdown(context.Background())
 
 		p.Publish(makeEvent("test.worker"))
@@ -407,6 +413,9 @@ func makeEvent(eventType string) *core.Event {
 	return &core.Event{
 		PublishEventRequest: agentcatapi.PublishEventRequest{
 			EventType: strPtr(eventType),
+			// A project ID is required for the API send path; without one the
+			// publisher treats the event as telemetry-only and skips sending.
+			ProjectId: "proj_test",
 		},
 	}
 }
@@ -527,14 +536,14 @@ func TestGetOrInit_Resettable(t *testing.T) {
 	globalPub = nil
 	globalMu.Unlock()
 
-	p1 := GetOrInit(nil, "")
+	p1 := GetOrInit(nil, "", nil)
 	if p1 == nil {
 		t.Fatal("GetOrInit returned nil")
 	}
 
 	ShutdownGlobal(context.Background())
 
-	p2 := GetOrInit(nil, "")
+	p2 := GetOrInit(nil, "", nil)
 	if p2 == nil {
 		t.Fatal("GetOrInit returned nil after reset")
 	}
@@ -544,4 +553,169 @@ func TestGetOrInit_Resettable(t *testing.T) {
 	}
 
 	ShutdownGlobal(context.Background())
+}
+
+func TestQueueSizeIncreased(t *testing.T) {
+	if QueueSize != 10000 {
+		t.Errorf("QueueSize = %d, want 10000", QueueSize)
+	}
+}
+
+func TestPublishEvent_RetriesFailedSends(t *testing.T) {
+	p := New(nil, "", nil)
+	defer p.Shutdown(context.Background())
+
+	var attempts int64
+	p.sendFn = func(event *core.Event, workerID int) bool {
+		n := atomic.AddInt64(&attempts, 1)
+		return n >= 2 // fail once, succeed on first retry
+	}
+
+	start := time.Now()
+	p.publishEvent(makeEvent("retry.test"), 0)
+	elapsed := time.Since(start)
+
+	if got := atomic.LoadInt64(&attempts); got != 2 {
+		t.Errorf("attempts = %d, want 2", got)
+	}
+	// First retry should be delayed by ~1s of backoff.
+	if elapsed < RetryBaseDelay {
+		t.Errorf("expected at least %v of backoff, got %v", RetryBaseDelay, elapsed)
+	}
+}
+
+func TestPublishEvent_GivesUpAfterMaxRetries(t *testing.T) {
+	if testing.Short() {
+		t.Skip("skipping backoff test in -short mode")
+	}
+
+	p := New(nil, "", nil)
+	defer p.Shutdown(context.Background())
+
+	var attempts int64
+	p.sendFn = func(event *core.Event, workerID int) bool {
+		atomic.AddInt64(&attempts, 1)
+		return false
+	}
+
+	p.publishEvent(makeEvent("giveup.test"), 0)
+
+	if got := atomic.LoadInt64(&attempts); got != int64(MaxRetries)+1 {
+		t.Errorf("attempts = %d, want %d", got, MaxRetries+1)
+	}
+}
+
+func TestPublishEvent_RetryInterruptedByShutdown(t *testing.T) {
+	p := New(nil, "", nil)
+
+	var attempts int64
+	p.sendFn = func(event *core.Event, workerID int) bool {
+		atomic.AddInt64(&attempts, 1)
+		return false
+	}
+
+	done := make(chan struct{})
+	go func() {
+		p.publishEvent(makeEvent("interrupt.test"), 0)
+		close(done)
+	}()
+
+	// Let the first attempt fail, then shut down during the backoff wait.
+	time.Sleep(100 * time.Millisecond)
+	p.Shutdown(context.Background())
+
+	select {
+	case <-done:
+	case <-time.After(500 * time.Millisecond):
+		t.Fatal("publishEvent did not abort retries on shutdown")
+	}
+
+	if got := atomic.LoadInt64(&attempts); got != 1 {
+		t.Errorf("attempts = %d, want 1 (retries should be interrupted)", got)
+	}
+}
+
+func TestPublishEvent_AppliesSanitization(t *testing.T) {
+	p := New(nil, "", nil)
+	defer p.Shutdown(context.Background())
+
+	var sent *core.Event
+	p.sendFn = func(event *core.Event, workerID int) bool {
+		sent = event
+		return true
+	}
+
+	event := makeEvent("sanitize.test")
+	event.Response = map[string]any{
+		"content": []any{
+			map[string]any{"type": "image", "data": "aGVsbG8=", "mimeType": "image/png"},
+		},
+	}
+
+	p.publishEvent(event, 0)
+
+	if sent == nil {
+		t.Fatal("event was not sent")
+	}
+	block := sent.Response["content"].([]any)[0].(map[string]any)
+	if block["type"] != "text" {
+		t.Errorf("image block was not sanitized: %v", block)
+	}
+}
+
+func TestPublishEvent_AppliesTruncation(t *testing.T) {
+	p := New(nil, "", nil)
+	defer p.Shutdown(context.Background())
+
+	var sent *core.Event
+	p.sendFn = func(event *core.Event, workerID int) bool {
+		sent = event
+		return true
+	}
+
+	longIntent := strings.Repeat("i", 5000)
+	event := makeEvent("truncate.test")
+	event.UserIntent = &longIntent
+
+	p.publishEvent(event, 0)
+
+	if sent == nil {
+		t.Fatal("event was not sent")
+	}
+	if len(*sent.UserIntent) != 2048+len("...") {
+		t.Errorf("user intent length = %d, want %d", len(*sent.UserIntent), 2048+len("..."))
+	}
+}
+
+func TestPublishEvent_PipelineOrderRedactSanitizeTruncate(t *testing.T) {
+	// Redaction must run before sanitization/truncation (matching the TS
+	// pipeline). A redaction function that expands a marker into a long string
+	// should be truncated afterwards.
+	p := New(func(s string) string {
+		if s == "EXPAND" {
+			return strings.Repeat("x", 5000)
+		}
+		return s
+	}, "", nil)
+	defer p.Shutdown(context.Background())
+
+	var sent *core.Event
+	p.sendFn = func(event *core.Event, workerID int) bool {
+		sent = event
+		return true
+	}
+
+	intent := "EXPAND"
+	event := makeEvent("pipeline.test")
+	event.UserIntent = &intent
+
+	p.publishEvent(event, 0)
+
+	if sent == nil {
+		t.Fatal("event was not sent")
+	}
+	if len(*sent.UserIntent) != 2048+len("...") {
+		t.Errorf("user intent length = %d, want %d (redacted then truncated)",
+			len(*sent.UserIntent), 2048+len("..."))
+	}
 }

@@ -30,15 +30,15 @@ func buildStaticAttributes(projectID, integration, mcpSDKPath string) []otlpAttr
 	}
 
 	if projectID != "" {
-		add("mcpcat.project_id", projectID)
+		add("agentcat.project_id", projectID)
 	} else {
-		add("mcpcat.install_id", computeInstallID())
+		add("agentcat.install_id", computeInstallID())
 	}
 
-	add("mcpcat.sdk.language", "go")
-	add("mcpcat.sdk.version", session.GetDependencyVersion(sdkModulePath))
-	add("mcpcat.mcp_sdk.version", session.GetDependencyVersion(mcpSDKPath))
-	add("mcpcat.integration", integration)
+	add("agentcat.sdk.language", "go")
+	add("agentcat.sdk.version", session.GetDependencyVersion(sdkModulePath))
+	add("agentcat.mcp_sdk.version", session.GetDependencyVersion(mcpSDKPath))
+	add("agentcat.integration", integration)
 
 	add("process.runtime.name", "go")
 	add("process.runtime.version", runtime.Version())

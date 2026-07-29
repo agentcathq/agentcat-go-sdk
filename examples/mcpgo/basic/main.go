@@ -1,6 +1,6 @@
-// Example: Minimal MCPCat integration with mark3labs/mcp-go
+// Example: Minimal AgentCat integration with mark3labs/mcp-go
 //
-// This shows the simplest possible MCPCat setup — just call Track() and defer
+// This shows the simplest possible AgentCat setup — just call Track() and defer
 // shutdown. All tool calls, resource reads, and protocol events are captured
 // automatically.
 //
@@ -49,7 +49,7 @@ func main() {
 		"1.0.0",
 	)
 
-	// --- MCPCat: 3 lines to add analytics ---
+	// --- AgentCat: 3 lines to add analytics ---
 	projectID := os.Getenv("MCPCAT_PROJECT_ID")
 	if projectID == "" {
 		projectID = "proj_YOUR_PROJECT_ID"
@@ -59,7 +59,7 @@ func main() {
 		log.Fatalf("agentcat: %v", err)
 	}
 	defer shutdown(context.Background())
-	// --- end MCPCat ---
+	// --- end AgentCat ---
 
 	s.AddTool(
 		mcp.NewTool("echo",

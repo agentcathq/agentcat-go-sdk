@@ -199,7 +199,7 @@ func TestUserIdentity_Integration(t *testing.T) {
 	var mu sync.Mutex
 
 	opts := &Options{
-		Identify: func(ctx context.Context, request *mcp.CallToolRequest) *agentcat.UserIdentity {
+		Identify: func(ctx context.Context, request any) *agentcat.UserIdentity {
 			mu.Lock()
 			defer mu.Unlock()
 			identifyCalled = true

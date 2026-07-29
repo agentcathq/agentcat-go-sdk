@@ -4,6 +4,7 @@ import (
 	"context"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -83,7 +84,7 @@ func createTestServer(t *testing.T, opts *Options) (*mcp.Server, *mcp.ClientSess
 		Debug:                      opts.Debug,
 		RedactSensitiveInformation: opts.RedactSensitiveInformation,
 	}
-	instance := &agentcat.MCPcatInstance{
+	instance := &agentcat.AgentCatInstance{
 		ProjectID: projectID,
 		Options:   coreOpts,
 		ServerRef: server,
@@ -148,16 +149,8 @@ func TestMiddleware_ToolCall_CreatesEvent(t *testing.T) {
 		}
 	}
 
-	// Wait for events to be captured asynchronously
-	events := mock.waitForEvents(1, 2*time.Second)
-
-	// Filter for tool call events (skip initialize and initialized)
-	var toolEvents []*agentcat.Event
-	for _, evt := range events {
-		if evt.EventType != nil && *evt.EventType == "mcp:tools/call" {
-			toolEvents = append(toolEvents, evt)
-		}
-	}
+	// Wait for the tool call event to be captured asynchronously
+	toolEvents := waitForEventType(mock, "mcp:tools/call", 1, 2*time.Second)
 
 	if len(toolEvents) == 0 {
 		t.Fatal("expected at least one tool call event")
@@ -340,10 +333,17 @@ func TestMiddleware_CapturesInitializeEvent(t *testing.T) {
 }
 
 func TestMiddleware_WithIdentify(t *testing.T) {
-	identifyCalled := false
+	// The callback runs on detached capture goroutines (one per captured
+	// event), so the flag must be synchronized with the test goroutine.
+	var identifyCalled atomic.Bool
 	opts := DefaultOptions()
-	opts.Identify = func(ctx context.Context, request *mcp.CallToolRequest) *agentcat.UserIdentity {
-		identifyCalled = true
+	opts.Identify = func(ctx context.Context, request mcp.Request) *agentcat.UserIdentity {
+		// Gate to tool calls so initialize/notification captures do not emit
+		// identify events (waitForEvents below counts on exactly one).
+		if _, ok := request.(*mcp.CallToolRequest); !ok {
+			return nil
+		}
+		identifyCalled.Store(true)
 		return &agentcat.UserIdentity{
 			UserID:   "user_123",
 			UserName: "Test User",
@@ -369,14 +369,14 @@ func TestMiddleware_WithIdentify(t *testing.T) {
 	// The identify event and tool call event are both published for the first tool call.
 	events := mock.waitForEvents(4, 3*time.Second)
 
-	if !identifyCalled {
+	if !identifyCalled.Load() {
 		t.Error("expected Identify function to be called")
 	}
 
 	// Find the identify event
 	var identifyEvents []*agentcat.Event
 	for _, evt := range events {
-		if evt.EventType != nil && *evt.EventType == "mcpcat:identify" {
+		if evt.EventType != nil && *evt.EventType == "agentcat:identify" {
 			identifyEvents = append(identifyEvents, evt)
 		}
 	}
@@ -394,11 +394,19 @@ func TestMiddleware_WithIdentify(t *testing.T) {
 	}
 }
 
-func TestMiddleware_IdentifyCalledOncePerSession(t *testing.T) {
+// TestMiddleware_IdentifyPublishesEveryTime verifies the identify callback
+// re-runs on every tool call and an agentcat:identify event is published every
+// time it returns a non-nil identity — even when the identity is unchanged.
+func TestMiddleware_IdentifyPublishesEveryTime(t *testing.T) {
 	identifyCount := 0
 	var mu sync.Mutex
 	opts := DefaultOptions()
-	opts.Identify = func(ctx context.Context, request *mcp.CallToolRequest) *agentcat.UserIdentity {
+	opts.Identify = func(ctx context.Context, request mcp.Request) *agentcat.UserIdentity {
+		// Count and identify only tool calls so the expected event counts
+		// below stay deterministic.
+		if _, ok := request.(*mcp.CallToolRequest); !ok {
+			return nil
+		}
 		mu.Lock()
 		identifyCount++
 		mu.Unlock()
@@ -423,7 +431,7 @@ func TestMiddleware_IdentifyCalledOncePerSession(t *testing.T) {
 	}
 
 	// Wait for the first tool call event to be processed
-	mock.waitForEvents(2, 2*time.Second) // init + first tool call
+	waitForEventType(mock, "mcp:tools/call", 1, 2*time.Second)
 
 	_, err = clientSession.CallTool(ctx, &mcp.CallToolParams{
 		Name:      "greet",
@@ -433,15 +441,29 @@ func TestMiddleware_IdentifyCalledOncePerSession(t *testing.T) {
 		t.Fatalf("second CallTool error: %v", err)
 	}
 
-	// Wait for events
-	mock.waitForEvents(4, 2*time.Second)
+	// Wait for the second tool call event to be processed
+	waitForEventType(mock, "mcp:tools/call", 2, 2*time.Second)
+	events := mock.getEvents()
 
 	mu.Lock()
 	count := identifyCount
 	mu.Unlock()
 
-	if count != 1 {
-		t.Errorf("expected Identify to be called exactly once, got %d", count)
+	// The callback re-runs on every tool call.
+	if count != 2 {
+		t.Errorf("expected Identify to be called on each tool call (2), got %d", count)
+	}
+
+	// An identify event is published every time the callback returns a
+	// non-nil identity — no change-detection dedup.
+	identifyEvents := 0
+	for _, evt := range events {
+		if evt.EventType != nil && *evt.EventType == "agentcat:identify" {
+			identifyEvents++
+		}
+	}
+	if identifyEvents != 2 {
+		t.Errorf("expected 2 identify events (one per tool call, no dedup), got %d", identifyEvents)
 	}
 }
 

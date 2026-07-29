@@ -184,20 +184,6 @@ func TestSession_FieldPopulation(t *testing.T) {
 // ============================================================================
 
 func TestSession_IdentifyLogic(t *testing.T) {
-	t.Run("does not identify when already identified", func(t *testing.T) {
-		session := &agentcat.Session{
-			IdentifyActorGivenId: agentcat.Ptr("user-123"),
-		}
-
-		if session.IdentifyActorGivenId == nil {
-			t.Error("session should already be identified")
-		}
-
-		if *session.IdentifyActorGivenId != "user-123" {
-			t.Error("identify ID should not be changed")
-		}
-	})
-
 	t.Run("identify updates session with user info", func(t *testing.T) {
 		session := &agentcat.Session{}
 

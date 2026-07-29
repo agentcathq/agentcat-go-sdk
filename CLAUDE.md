@@ -38,12 +38,12 @@ officialsdk/                # official go-sdk adapter (separate go.mod)
   middleware.go             # receiving middleware for event capture
   session.go                # session metadata from go-sdk ServerSession
 internal/                   # shared internals (only importable by root module)
-  core/                     # types: Options, Event, Session, MCPcatInstance, UserIdentity
+  core/                     # types: Options, Event, Session, AgentCatInstance, UserIdentity
   publisher/                # async event publisher with worker pool → AgentCat API
   event/                    # event construction helpers
   redaction/                # applies RedactFunc to event fields before publish
-  registry/                 # thread-safe server→MCPcatInstance map
-  logging/                  # file-backed debug logger (~/mcpcat.log)
+  registry/                 # thread-safe server→AgentCatInstance map
+  logging/                  # file-backed debug logger (~/agentcat.log)
   session/                  # session ID generation
   testutil/                 # shared test helpers
 examples/                   # runnable examples for both adapters (basic + advanced)
@@ -57,7 +57,7 @@ examples/                   # runnable examples for both adapters (basic + advan
 
 **Publisher** is a global singleton (`sync.Once`) with a buffered channel queue and worker pool. Events are enqueued via `Publish()`, redacted if configured, and sent to the AgentCat API. `Shutdown()` drains the queue with a context deadline (default 5s).
 
-**Registry** maps server instances → `MCPcatInstance` (project ID + options) via a `sync.RWMutex`-guarded map. This lets hooks/middleware look up config for the server they're attached to.
+**Registry** maps server instances → `AgentCatInstance` (project ID + options) via a `sync.RWMutex`-guarded map. This lets hooks/middleware look up config for the server they're attached to.
 
 **Two optional injected tools**: `get_more_tools` (lets LLMs report missing functionality) and a `context` parameter on existing tools (captures user intent). Both controlled via `Options`.
 

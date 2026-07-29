@@ -111,7 +111,7 @@ func TestTrack_WithIdentify(t *testing.T) {
 
 	identifyCalled := false
 	opts := &Options{
-		Identify: func(ctx context.Context, request *mcp.CallToolRequest) *UserIdentity {
+		Identify: func(ctx context.Context, request mcp.Request) *UserIdentity {
 			identifyCalled = true
 			return &UserIdentity{
 				UserID:   "user123",

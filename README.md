@@ -82,7 +82,7 @@ defer shutdown(context.Background())
 
 ### User Identification
 
-Identify your user sessions with a callback to attach user information to every event in a session.
+Identify your user sessions with a callback to attach user information to every event in a session. The callback runs on every auto-captured event (tool calls, resource reads, initialize, and so on); every time it returns a non-nil identity, an `agentcat:identify` event is published and the session identity is updated (`UserID`/`UserName` are overwritten, `UserData` merges across calls). Return `nil` to skip a request — for example, type-assert `*mcp.CallToolRequest` to identify only on tool calls.
 
 **mark3labs/mcp-go:**
 ```go
@@ -92,7 +92,12 @@ import (
 )
 
 shutdown, err := agentcat.Track(s, "proj_YOUR_PROJECT_ID", &agentcat.Options{
-    Identify: func(ctx context.Context, req *mcp.CallToolRequest) *agentcat.UserIdentity {
+    Identify: func(ctx context.Context, request any) *agentcat.UserIdentity {
+        req, ok := request.(*mcp.CallToolRequest)
+        if !ok {
+            return nil // identify on tool calls only
+        }
+        _ = req // extract identity from the request, ctx, headers, or an auth token
         return &agentcat.UserIdentity{
             UserID: "user_12345", UserName: "demo_user",
             UserData: map[string]any{"email": "demo@example.com"},
@@ -109,7 +114,12 @@ import (
 )
 
 shutdown, err := agentcat.Track(s, "proj_YOUR_PROJECT_ID", &agentcat.Options{
-    Identify: func(ctx context.Context, req *mcp.CallToolRequest) *agentcat.UserIdentity {
+    Identify: func(ctx context.Context, request mcp.Request) *agentcat.UserIdentity {
+        req, ok := request.(*mcp.CallToolRequest)
+        if !ok {
+            return nil // identify on tool calls only
+        }
+        _ = req // extract identity from the request, ctx, headers, or an auth token
         return &agentcat.UserIdentity{
             UserID: "user_12345", UserName: "demo_user",
             UserData: map[string]any{"email": "demo@example.com"},
@@ -130,9 +140,59 @@ shutdown, err := agentcat.Track(s, "proj_YOUR_PROJECT_ID", &agentcat.Options{
 })
 ```
 
+### Telemetry Exporters
+
+Send every captured event to your existing observability stack — in addition to (or instead of) the AgentCat platform. Four exporters are available: `otlp`, `datadog`, `sentry`, and `posthog`. Exporters run fire-and-forget in parallel with the AgentCat API send; an exporter failure never affects your server or the other exporters.
+
+```go
+shutdown, err := agentcat.Track(s, "proj_YOUR_PROJECT_ID", &agentcat.Options{
+    Exporters: map[string]agentcat.ExporterConfig{
+        // OpenTelemetry (any OTLP/HTTP collector; /v1/traces is appended automatically)
+        "otlp": {
+            Type:     "otlp",
+            Endpoint: "http://localhost:4318",
+            Headers:  map[string]string{"Authorization": "Bearer TOKEN"}, // optional
+        },
+        // Datadog (logs + metrics)
+        "datadog": {
+            Type:    "datadog",
+            APIKey:  os.Getenv("DD_API_KEY"),
+            Site:    "datadoghq.com", // or datadoghq.eu, us3.datadoghq.com, ...
+            Service: "my-mcp-server",
+            Env:     "production", // optional
+        },
+        // Sentry (logs always; error events create Issues; transactions with EnableTracing)
+        "sentry": {
+            Type:          "sentry",
+            DSN:           os.Getenv("SENTRY_DSN"),
+            Environment:   "production", // optional
+            Release:       "1.2.3",      // optional
+            EnableTracing: true,         // optional, default false
+        },
+        // PostHog (batch capture; $exception on errors; $ai_span with EnableAITracing)
+        "posthog": {
+            Type:            "posthog",
+            APIKey:          os.Getenv("POSTHOG_API_KEY"),
+            Host:            "https://us.i.posthog.com", // optional, default shown
+            EnableAITracing: true,                       // optional, default false
+        },
+    },
+})
+```
+
+**Telemetry-only mode**: pass an empty project ID (`""`) with at least one exporter configured, and events go only to your exporters — no AgentCat account required.
+
+```go
+shutdown, err := agentcat.Track(s, "", &agentcat.Options{
+    Exporters: map[string]agentcat.ExporterConfig{
+        "otlp": {Type: "otlp", Endpoint: "http://localhost:4318"},
+    },
+})
+```
+
 ### Debug Mode
 
-Enable debug logging for troubleshooting. Debug logs are written to `~/mcpcat.log`.
+Enable debug logging for troubleshooting. Debug logs are written to `~/agentcat.log`.
 
 ```go
 shutdown, err := agentcat.Track(s, "proj_YOUR_PROJECT_ID", &agentcat.Options{Debug: true})
@@ -152,7 +212,7 @@ To help us catch and fix broken installs, the SDK sends AgentCat a small, anonym
 signal when setup or runtime errors occur — never your tool calls, your responses,
 or anything about your users. Records carry only operational metadata, such as your
 project ID (or an anonymous install ID when none is set), SDK version, and Go
-runtime/OS/arch. Your local `~/mcpcat.log` is unchanged.
+runtime/OS/arch. Your local `~/agentcat.log` is unchanged.
 
 Diagnostics are on by default and can be turned off completely with either:
 
@@ -165,10 +225,12 @@ Diagnostics are on by default and can be turned off completely with either:
 |--------|------|---------|-------------|
 | `DisableReportMissing` | `bool` | `false` | When `true`, prevents the `get_more_tools` tool from being registered |
 | `DisableToolCallContext` | `bool` | `false` | When `true`, prevents the `context` parameter from being injected on tool calls |
-| `Debug` | `bool` | `false` | Enable debug logging to `~/mcpcat.log` |
+| `Debug` | `bool` | `false` | Enable debug logging to `~/agentcat.log` |
 | `RedactSensitiveInformation` | `func(string) string` | `nil` | Custom redaction applied to all text data before sending |
-| `Identify` | callback | `nil` | Attach user information to sessions |
+| `Identify` | callback | `nil` | Runs on every auto-captured event to attach user information to sessions; publishes an `agentcat:identify` event whenever it returns a non-nil identity |
 | `Hooks` | `*server.Hooks` | `nil` | Pre-existing hooks to merge with (mcp-go only) |
+| `Exporters` | `map[string]ExporterConfig` | `nil` | Telemetry exporters (`otlp`, `datadog`, `sentry`, `posthog`); with at least one exporter, the project ID may be empty (telemetry-only mode) |
+| `APIBaseURL` | `string` | `https://api.agentcat.com` | Override the AgentCat API endpoint; falls back to `AGENTCAT_API_URL`, then the legacy `MCPCAT_API_URL` env var |
 
 ## Free for open source
 
