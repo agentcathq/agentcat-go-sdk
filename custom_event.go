@@ -113,17 +113,19 @@ func PublishCustomEvent(serverOrSessionID any, projectID string, data *CustomEve
 	// For tracked servers, reuse the server's redaction, API base URL, and
 	// exporter configuration.
 	var redactFn RedactFunc
+	var redactEventFn RedactEventFunc
 	var exporterConfigs map[string]ExporterConfig
 	apiBaseURL := ResolveAPIBaseURL("")
 	if instance != nil && instance.Options != nil {
 		redactFn = instance.Options.RedactSensitiveInformation
+		redactEventFn = instance.Options.RedactEvent
 		exporterConfigs = instance.Options.Exporters
 		if instance.Options.APIBaseURL != "" {
 			apiBaseURL = instance.Options.APIBaseURL
 		}
 	}
 
-	pub := publisher.GetOrInit(redactFn, apiBaseURL, exporterConfigs)
+	pub := publisher.GetOrInit(redactFn, redactEventFn, apiBaseURL, exporterConfigs)
 	pub.Publish(evt)
 
 	logging.New().Debugf("Published custom event for session %s with type %q", sessionID, CustomEventType)

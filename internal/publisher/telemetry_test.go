@@ -38,7 +38,7 @@ func waitForHits(t *testing.T, hits *atomic.Int64, n int64, timeout time.Duratio
 func TestPublishEvent_FansOutToExportersAlongsideAPISend(t *testing.T) {
 	srv, hits := newTelemetryTestServer(t)
 
-	p := New(nil, "", map[string]core.ExporterConfig{
+	p := New(nil, nil, "", map[string]core.ExporterConfig{
 		"otlp": {Type: "otlp", Endpoint: srv.URL},
 	})
 	defer p.Shutdown(context.Background())
@@ -60,7 +60,7 @@ func TestPublishEvent_FansOutToExportersAlongsideAPISend(t *testing.T) {
 func TestPublishEvent_TelemetryOnlySkipsAPISend(t *testing.T) {
 	srv, hits := newTelemetryTestServer(t)
 
-	p := New(nil, "", map[string]core.ExporterConfig{
+	p := New(nil, nil, "", map[string]core.ExporterConfig{
 		"otlp": {Type: "otlp", Endpoint: srv.URL},
 	})
 	defer p.Shutdown(context.Background())
@@ -87,7 +87,7 @@ func TestPublishEvent_ExporterFailureDoesNotAffectAPISend(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	p := New(nil, "", map[string]core.ExporterConfig{
+	p := New(nil, nil, "", map[string]core.ExporterConfig{
 		"otlp": {Type: "otlp", Endpoint: srv.URL},
 	})
 	defer p.Shutdown(context.Background())
@@ -110,13 +110,13 @@ func TestGetOrInit_ReplacesTelemetryManagerOnExistingPublisher(t *testing.T) {
 	ShutdownGlobal(context.Background())
 	t.Cleanup(func() { ShutdownGlobal(context.Background()) })
 
-	p1 := GetOrInit(nil, "", nil)
+	p1 := GetOrInit(nil, nil, "", nil)
 	if p1.telemetry.Load() != nil {
 		t.Fatal("expected no telemetry manager without exporter configs")
 	}
 
 	srv, hits := newTelemetryTestServer(t)
-	p2 := GetOrInit(nil, "", map[string]core.ExporterConfig{
+	p2 := GetOrInit(nil, nil, "", map[string]core.ExporterConfig{
 		"otlp": {Type: "otlp", Endpoint: srv.URL},
 	})
 	if p2 != p1 {

@@ -140,6 +140,26 @@ shutdown, err := agentcat.Track(s, "proj_YOUR_PROJECT_ID", &agentcat.Options{
 })
 ```
 
+For redaction decisions that need more context than a single string — such as which tool was called or what type of event is being published — use the event-level `RedactEvent` hook. It receives the full event object and returns a modified event, or `nil` to drop the event entirely. It can be combined with `RedactSensitiveInformation`.
+
+```go
+shutdown, err := agentcat.Track(s, "proj_YOUR_PROJECT_ID", &agentcat.Options{
+    RedactEvent: func(event *agentcat.Event) (*agentcat.Event, error) {
+        // Drop events from tools that handle secrets entirely
+        if event.GetResourceName() == "get_credentials" {
+            return nil, nil
+        }
+        // Strip response payloads from a specific tool
+        if event.GetResourceName() == "export_report" {
+            event.Response = nil
+        }
+        return event, nil
+    },
+})
+```
+
+When both hooks are configured, `RedactEvent` runs first and sees the raw, unredacted values; `RedactSensitiveInformation` then runs on its output as a final string-level scrub. The system-managed fields `Id`, `SessionId`, `ProjectId`, `EventType`, and `Timestamp` cannot be changed by the hook, and if the hook returns an error or panics, the event is dropped.
+
 ### Telemetry Exporters
 
 Send every captured event to your existing observability stack — in addition to (or instead of) the AgentCat platform. Four exporters are available: `otlp`, `datadog`, `sentry`, and `posthog`. Exporters run fire-and-forget in parallel with the AgentCat API send; an exporter failure never affects your server or the other exporters.
@@ -227,6 +247,7 @@ Diagnostics are on by default and can be turned off completely with either:
 | `DisableToolCallContext` | `bool` | `false` | When `true`, prevents the `context` parameter from being injected on tool calls |
 | `Debug` | `bool` | `false` | Enable debug logging to `~/agentcat.log` |
 | `RedactSensitiveInformation` | `func(string) string` | `nil` | Custom redaction applied to all text data before sending |
+| `RedactEvent` | `func(*Event) (*Event, error)` | `nil` | Event-level redaction hook; rewrite the full event or return `nil` to drop it |
 | `Identify` | callback | `nil` | Runs on every auto-captured event to attach user information to sessions; publishes an `agentcat:identify` event whenever it returns a non-nil identity |
 | `Hooks` | `*server.Hooks` | `nil` | Pre-existing hooks to merge with (mcp-go only) |
 | `Exporters` | `map[string]ExporterConfig` | `nil` | Telemetry exporters (`otlp`, `datadog`, `sentry`, `posthog`); with at least one exporter, the project ID may be empty (telemetry-only mode) |

@@ -44,8 +44,8 @@ func UnregisterServer(server any) {
 // If apiBaseURL is empty, the default AgentCat API URL is used. When exporter
 // configs are provided, every published event is also fanned out to the
 // configured telemetry exporters, independently of the AgentCat API send.
-func InitPublisher(redactFn RedactFunc, apiBaseURL string, exporterConfigs map[string]ExporterConfig) func(evt *Event) {
-	pub := publisher.GetOrInit(redactFn, apiBaseURL, exporterConfigs)
+func InitPublisher(redactFn RedactFunc, redactEventFn RedactEventFunc, apiBaseURL string, exporterConfigs map[string]ExporterConfig) func(evt *Event) {
+	pub := publisher.GetOrInit(redactFn, redactEventFn, apiBaseURL, exporterConfigs)
 	return func(evt *Event) {
 		if evt != nil {
 			pub.Publish(evt)

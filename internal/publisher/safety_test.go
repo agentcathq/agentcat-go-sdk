@@ -19,7 +19,7 @@ import (
 // same worker keeps processing later events. Without the recovery this test
 // crashes the whole test process.
 func TestWorker_SurvivesPanicWhileSending(t *testing.T) {
-	p := New(nil, "http://localhost:0", nil)
+	p := New(nil, nil, "http://localhost:0", nil)
 	p.maxRetries = 0
 	defer p.Shutdown(context.Background())
 
@@ -70,7 +70,7 @@ func TestPublishEvent_HostileParameters(t *testing.T) {
 		"normal":   "keep-me",
 	}
 
-	p := New(func(s string) string { return s }, "http://localhost:0", nil)
+	p := New(func(s string) string { return s }, nil, "http://localhost:0", nil)
 	p.maxRetries = 0
 	defer p.Shutdown(context.Background())
 
@@ -115,7 +115,7 @@ func TestShutdown_HangingExporterBoundedByDeadline(t *testing.T) {
 		srv.Close()
 	}()
 
-	p := New(nil, "http://localhost:0", map[string]core.ExporterConfig{
+	p := New(nil, nil, "http://localhost:0", map[string]core.ExporterConfig{
 		"hang": {Type: "otlp", Endpoint: srv.URL},
 	})
 	p.maxRetries = 0
