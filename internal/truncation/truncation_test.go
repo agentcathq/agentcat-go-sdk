@@ -7,7 +7,7 @@ import (
 	"testing"
 
 	agentcatapi "go.agentcat.com/api"
-	"go.agentcat.com/sdk/internal/core"
+	"go.agentcat.com/sdk/v2/internal/core"
 )
 
 func strPtr(s string) *string { return &s }

@@ -6,7 +6,7 @@ import (
 	"sync/atomic"
 	"testing"
 
-	"go.agentcat.com/sdk/internal/logging"
+	"go.agentcat.com/sdk/v2/internal/logging"
 )
 
 // TestInit_DisabledUnderGoTest_WhenEnvUnset is the core regression guard: with

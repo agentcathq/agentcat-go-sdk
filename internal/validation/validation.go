@@ -7,7 +7,7 @@ import (
 	"sort"
 	"strings"
 
-	"go.agentcat.com/sdk/internal/logging"
+	"go.agentcat.com/sdk/v2/internal/logging"
 )
 
 const (

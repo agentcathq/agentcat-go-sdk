@@ -7,7 +7,7 @@ import (
 	"sort"
 	"time"
 
-	"go.agentcat.com/sdk/internal/core"
+	"go.agentcat.com/sdk/v2/internal/core"
 )
 
 // orDefault returns s, or def when s is empty.

@@ -12,7 +12,7 @@ import (
 	"github.com/mark3labs/mcp-go/client"
 	"github.com/mark3labs/mcp-go/mcp"
 	"github.com/mark3labs/mcp-go/server"
-	agentcat "go.agentcat.com/sdk"
+	agentcat "go.agentcat.com/sdk/v2"
 )
 
 // unhashableErr is an error whose dynamic type cannot be used as a map key
@@ -44,21 +44,12 @@ func setupSafetyServer(t *testing.T, opts *Options) (*client.Client, *mockPublis
 		},
 	)
 
-	hooks := &server.Hooks{}
-	server.WithHooks(hooks)(mcpServer)
-
-	mock := &mockPublisher{}
-	sessionMap := addTracingToHooks(hooks, opts, mock.publish)
-	t.Cleanup(sessionMap.Stop)
-
-	instance := &agentcat.AgentCatInstance{
-		ProjectID: "test_project",
-		Options:   &agentcat.Options{},
-		ServerRef: mcpServer,
-		SessionID: agentcat.NewSessionID(),
-	}
+	instance := newTestInstance(mcpServer, "test_project", opts)
 	agentcat.RegisterServer(mcpServer, instance)
 	t.Cleanup(func() { unregisterServer(mcpServer) })
+
+	mock := &mockPublisher{}
+	installTracking(mcpServer, instance, opts, mock.publish)
 
 	// Use a real HTTP transport so hooks see a client session (the in-process
 	// transport does not attach one).
@@ -137,8 +128,8 @@ func TestHostileToolErrors_DoNotCrashServer(t *testing.T) {
 
 // TestConcurrentIdentifyChanges_NoRace hammers tool calls while the Identify
 // callback keeps returning different identities with UserData maps, verifying
-// (under -race) that identity merge, session mutation, and identify-event
-// publishing are properly synchronized.
+// (under -race) that per-call identity resolution and event stamping are
+// properly synchronized and never cross-attributed.
 func TestConcurrentIdentifyChanges_NoRace(t *testing.T) {
 	var n atomic.Int64
 	opts := DefaultOptions()
@@ -169,18 +160,27 @@ func TestConcurrentIdentifyChanges_NoRace(t *testing.T) {
 	}
 	wg.Wait()
 
-	// Every call returns a non-nil identity, so every tool call publishes an
-	// identify event alongside its tools/call event (no dedup).
-	events := mock.waitForEvents(2*workers*callsPerWorker, 5*time.Second)
-	var identifies int
-	for _, evt := range events {
-		if evt.EventType != nil && *evt.EventType == "agentcat:identify" {
-			identifies++
-		}
+	// Every call returns a non-nil identity, so every tool-call event carries
+	// a stamped actor — and each event's identity matches its own call number
+	// (no cross-attribution between concurrent requests).
+	const total = workers * callsPerWorker
+	events := filterEvents(mock.waitForEvents(total, 5*time.Second), "mcp:tools/call")
+	if len(events) != total {
+		t.Fatalf("expected %d tool-call events, got %d", total, len(events))
 	}
-	if identifies < workers*callsPerWorker {
-		t.Errorf("expected at least %d identify events (one per tool call), got %d",
-			workers*callsPerWorker, identifies)
+	seen := make(map[any]bool, total)
+	for _, evt := range events {
+		if evt.IdentifyActorGivenId == nil || *evt.IdentifyActorGivenId == "" {
+			t.Fatalf("every event must carry the identity resolved for its own call, got %v", evt.IdentifyActorGivenId)
+		}
+		call, ok := evt.IdentifyData["call"]
+		if !ok {
+			t.Fatalf("event lost its identity data: %v", evt.IdentifyData)
+		}
+		if seen[call] {
+			t.Errorf("identity for call %v stamped on two events (cross-attribution)", call)
+		}
+		seen[call] = true
 	}
 }
 

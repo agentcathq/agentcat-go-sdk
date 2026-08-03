@@ -10,7 +10,7 @@ import (
 	"testing"
 
 	"github.com/mark3labs/mcp-go/server"
-	agentcat "go.agentcat.com/sdk"
+	agentcat "go.agentcat.com/sdk/v2"
 )
 
 func TestMcpcatAPI_TrackNilServer(t *testing.T) {
@@ -73,9 +73,9 @@ func TestMcpcatAPI_TrackWithOptions(t *testing.T) {
 }
 
 func TestMcpcatAPI_TrackWithExistingHooks(t *testing.T) {
-	s := server.NewMCPServer("test", "1.0.0")
 	hooks := &server.Hooks{}
-	_, err := Track(s, "proj_hooks", &Options{Hooks: hooks})
+	s := server.NewMCPServer("test", "1.0.0", server.WithHooks(hooks))
+	_, err := Track(s, "proj_hooks", nil)
 	if err != nil {
 		t.Fatalf("Track with hooks failed: %v", err)
 	}

@@ -32,6 +32,8 @@ examples/officialsdk/basic/basic
 examples/officialsdk/basic/officialsdk-basic
 examples/officialsdk/advanced/advanced
 examples/officialsdk/advanced/officialsdk-advanced
+examples/officialsdk/factory/factory
+examples/officialsdk/factory/officialsdk-factory
 
 # Dependency directories
 # vendor/

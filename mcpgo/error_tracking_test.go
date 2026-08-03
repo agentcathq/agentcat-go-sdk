@@ -2,10 +2,14 @@ package mcpgo
 
 import (
 	"context"
+	"strings"
 	"testing"
+	"time"
 
 	"github.com/mark3labs/mcp-go/client"
 	"github.com/mark3labs/mcp-go/mcp"
+	"github.com/mark3labs/mcp-go/server"
+	agentcat "go.agentcat.com/sdk/v2"
 )
 
 // TestErrorTracking_ToolResultWithIsError verifies that calling a tool which
@@ -112,4 +116,95 @@ func TestErrorTracking_MissingRequiredParam(t *testing.T) {
 	if !result.IsError {
 		t.Errorf("expected result.IsError to be true when required param 'title' is missing, got false")
 	}
+}
+
+// TestFailingToolCall_HasInAppFrames verifies that a tool error captured from
+// user code carries a stack with in-app frames and none of the SDK's own.
+func TestFailingToolCall_HasInAppFrames(t *testing.T) {
+	mcpServer := server.NewMCPServer(
+		"test-server", "1.0.0",
+		server.WithToolCapabilities(true),
+	)
+
+	failTool := mcp.NewTool("always_fail", mcp.WithDescription("A tool that always fails"))
+	mcpServer.AddTool(failTool, func(ctx context.Context, request mcp.CallToolRequest) (*mcp.CallToolResult, error) {
+		return mcp.NewToolResultError("something went wrong in user code"), nil
+	})
+
+	opts := &Options{
+		DisableReportMissing:   true,
+		DisableToolCallContext: true,
+	}
+	instance := newTestInstance(mcpServer, "test_project", opts)
+	agentcat.RegisterServer(mcpServer, instance)
+	t.Cleanup(func() { unregisterServer(mcpServer) })
+
+	mock := &mockPublisher{}
+	installTracking(mcpServer, instance, opts, mock.publish)
+
+	result := callToolRaw(t, mcpServer, "always_fail", map[string]any{})
+	if !result.IsError {
+		t.Fatal("expected tool result to be an error")
+	}
+
+	events := mock.waitForEvents(1, 3*time.Second)
+	toolEvents := filterEvents(events, "mcp:tools/call")
+	if len(toolEvents) == 0 {
+		t.Fatalf("no tools/call event found, got %d events: %v", len(events), eventTypes(events))
+	}
+
+	toolEvt := toolEvents[0]
+	if toolEvt.IsError == nil || !*toolEvt.IsError {
+		t.Fatal("expected event to be marked as error")
+	}
+	if toolEvt.Error == nil {
+		t.Fatal("expected error data on event")
+	}
+
+	frames, ok := toolEvt.Error["frames"].([]map[string]any)
+	if !ok || len(frames) == 0 {
+		t.Fatal("expected non-empty frames in error data")
+	}
+
+	// No frame belongs to AgentCat SDK internals (they should be skipped).
+	for _, f := range frames {
+		fn, _ := f["function"].(string)
+		if strings.Contains(fn, "go.agentcat.com/sdk/v2/internal") {
+			t.Errorf("AgentCat internal frame should be skipped, found: %s", fn)
+		}
+	}
+
+	// At least one frame is marked in_app=true.
+	hasInApp := false
+	for _, f := range frames {
+		if inApp, ok := f["in_app"].(bool); ok && inApp {
+			hasInApp = true
+			break
+		}
+	}
+	if !hasInApp {
+		t.Error("expected at least one frame with in_app=true")
+	}
+
+	// No frame from runtime or testing packages exists (they should be skipped).
+	for _, f := range frames {
+		fn, _ := f["function"].(string)
+		pkg := extractPackageFromFunc(fn)
+		if pkg == "runtime" || strings.HasPrefix(pkg, "runtime/") || pkg == "testing" {
+			t.Errorf("runtime/testing frame should be skipped, found: %s", fn)
+		}
+	}
+}
+
+// extractPackageFromFunc extracts the package path from a qualified function
+// name. Test-local helper to avoid depending on internal packages.
+// Keep in sync with internal/exceptions.extractPackage.
+func extractPackageFromFunc(funcName string) string {
+	if idx := strings.Index(funcName, ".("); idx > 0 {
+		return funcName[:idx]
+	}
+	if idx := strings.LastIndex(funcName, "."); idx > 0 {
+		return funcName[:idx]
+	}
+	return funcName
 }

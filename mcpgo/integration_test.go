@@ -10,7 +10,7 @@ import (
 	"github.com/mark3labs/mcp-go/client"
 	"github.com/mark3labs/mcp-go/mcp"
 	"github.com/mark3labs/mcp-go/server"
-	agentcat "go.agentcat.com/sdk"
+	agentcat "go.agentcat.com/sdk/v2"
 )
 
 // TestBasicSetup_Integration tests that mcpcat can be set up without errors
@@ -41,10 +41,10 @@ func TestBasicSetup_Integration(t *testing.T) {
 
 // TestToolCallTracking_Integration tests that tool calls are tracked correctly
 func TestToolCallTracking_Integration(t *testing.T) {
-	mcpServer, store := CreateTodoServerSimple()
-
-	// Track hook invocations via shared hooks
+	// Track hook invocations via hooks the customer registers at construction
 	hooks := &server.Hooks{}
+	mcpServer, store := CreateTodoServerSimple(server.WithHooks(hooks))
+
 	var beforeCallCount, afterCallCount int
 	var mu sync.Mutex
 
@@ -62,10 +62,7 @@ func TestToolCallTracking_Integration(t *testing.T) {
 		}
 	})
 
-	opts := &Options{
-		Hooks: hooks,
-	}
-	_, err := Track(mcpServer, "test_project_id", opts)
+	_, err := Track(mcpServer, "test_project_id", nil)
 	if err != nil {
 		t.Fatalf("Failed to setup tracking: %v", err)
 	}
@@ -130,26 +127,17 @@ func TestToolCallTracking_Integration(t *testing.T) {
 	}
 }
 
-// TestSessionTracking_Integration tests that session information is captured
-func TestSessionTracking_Integration(t *testing.T) {
-	mcpServer, _ := CreateTodoServerSimple()
-
-	var capturedSession *agentcat.Session
-	var mu sync.Mutex
-
-	// Capture session info via shared hooks
+// TestServerInfo_Integration tests that a Track()ed server still completes
+// the initialize handshake and reports its own server metadata while the
+// customer has hooks registered.
+func TestServerInfo_Integration(t *testing.T) {
 	hooks := &server.Hooks{}
+	mcpServer, _ := CreateTodoServerSimple(server.WithHooks(hooks))
 	hooks.AddOnSuccess(func(ctx context.Context, id any, method mcp.MCPMethod, message any, result any) {
-		mu.Lock()
-		defer mu.Unlock()
-		// In real implementation, session would be extracted from context
-		// For this test, we just verify the hook is called
+		// Intentionally empty: registering customer hooks must not break Track().
 	})
 
-	opts := &Options{
-		Hooks: hooks,
-	}
-	_, err := Track(mcpServer, "test_project_id", opts)
+	_, err := Track(mcpServer, "test_project_id", nil)
 	if err != nil {
 		t.Fatalf("Failed to setup tracking: %v", err)
 	}
@@ -187,8 +175,6 @@ func TestSessionTracking_Integration(t *testing.T) {
 	if initResult.ServerInfo.Version != "1.0.0" {
 		t.Errorf("Expected server version '1.0.0', got '%s'", initResult.ServerInfo.Version)
 	}
-
-	_ = capturedSession // Suppress unused warning
 }
 
 // TestUserIdentity_Integration tests that custom identify function is called
@@ -337,23 +323,20 @@ func TestRedaction_Integration(t *testing.T) {
 
 // TestErrorHandling_Integration tests that errors are tracked correctly
 func TestErrorHandling_Integration(t *testing.T) {
-	mcpServer, _ := CreateTodoServerSimple()
-
 	var errorCaptured bool
 	var mu sync.Mutex
 
-	// Share hooks between user code and MCPCat
+	// Share hooks between user code and AgentCat: the customer registers
+	// them at construction, Track composes with them via GetHooks().
 	hooks := &server.Hooks{}
+	mcpServer, _ := CreateTodoServerSimple(server.WithHooks(hooks))
 	hooks.AddOnError(func(ctx context.Context, id any, method mcp.MCPMethod, message any, err error) {
 		mu.Lock()
 		defer mu.Unlock()
 		errorCaptured = true
 	})
 
-	opts := &Options{
-		Hooks: hooks,
-	}
-	_, err := Track(mcpServer, "test_project_id", opts)
+	_, err := Track(mcpServer, "test_project_id", nil)
 	if err != nil {
 		t.Fatalf("Failed to setup tracking: %v", err)
 	}

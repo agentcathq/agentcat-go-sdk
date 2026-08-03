@@ -10,7 +10,7 @@ import (
 	"testing"
 
 	"github.com/mark3labs/mcp-go/server"
-	"go.agentcat.com/sdk"
+	"go.agentcat.com/sdk/v2"
 )
 
 // TestMain is a repo-level belt-and-suspenders guard: the SDK already

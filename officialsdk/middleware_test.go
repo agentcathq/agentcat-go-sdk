@@ -2,6 +2,8 @@ package officialsdk
 
 import (
 	"context"
+	"encoding/json"
+	"errors"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -10,8 +12,62 @@ import (
 
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 
-	agentcat "go.agentcat.com/sdk"
+	agentcat "go.agentcat.com/sdk/v2"
 )
+
+// pinLegacyInitializeHandshake forces a test client to perform the legacy
+// initialize handshake. go-sdk v1.7.0 defaults new clients to MCP protocol
+// 2026-07-28 (SEP-2575), which replaces initialize with a server/discover
+// probe — on in-process transports the probe succeeds, so the server never
+// receives an initialize request and the middleware captures no
+// mcp:initialize event. Failing the probe client-side makes Client.Connect
+// fall back to the pre-2026 initialize handshake these tests were written
+// against.
+func pinLegacyInitializeHandshake(client *mcp.Client) {
+	client.AddSendingMiddleware(func(next mcp.MethodHandler) mcp.MethodHandler {
+		return func(ctx context.Context, method string, req mcp.Request) (mcp.Result, error) {
+			if method == "server/discover" {
+				return nil, errors.New("test client pinned to pre-2026 protocol")
+			}
+			return next(ctx, method, req)
+		}
+	})
+}
+
+// The two settle windows a test may use to prove that NO event arrives.
+// Absence has no signal to wait on, so it can only be observed by giving a
+// stray event time to land. These are the only two such numbers in the package.
+const (
+	// settleWindow covers capture → mock publisher: a synchronous call and
+	// a direct function call.
+	settleWindow = 200 * time.Millisecond
+
+	// settlePublishWindow covers capture → the real publisher's worker pool →
+	// an HTTP POST to a local capture API. A strictly longer path than
+	// settleWindow, so it gets a strictly longer window.
+	settlePublishWindow = 500 * time.Millisecond
+)
+
+// settleForAbsentEvents waits out settleWindow. Use it only where the assertion
+// is about the ABSENCE of an event; every other wait must key off a signal.
+func settleForAbsentEvents() { time.Sleep(settleWindow) }
+
+// settleForAbsentPublishes is settleForAbsentEvents for tests that assert
+// against the real publisher's HTTP output rather than a mock publisher.
+func settleForAbsentPublishes() { time.Sleep(settlePublishWindow) }
+
+// eventTypes lists the event types of a slice, for failure messages.
+func eventTypes(events []*agentcat.Event) []string {
+	types := make([]string, 0, len(events))
+	for _, evt := range events {
+		if evt.EventType != nil {
+			types = append(types, *evt.EventType)
+		} else {
+			types = append(types, "<nil>")
+		}
+	}
+	return types
+}
 
 // mockPublisher collects published events for test assertions.
 type mockPublisher struct {
@@ -81,18 +137,19 @@ func createTestServer(t *testing.T, opts *Options) (*mcp.Server, *mcp.ClientSess
 	coreOpts := &agentcat.Options{
 		DisableReportMissing:       opts.DisableReportMissing,
 		DisableToolCallContext:     opts.DisableToolCallContext,
+		DisableTracing:             opts.DisableTracing,
+		CustomContextDescription:   opts.CustomContextDescription,
+		EnableAgentTracking:        opts.EnableAgentTracking,
 		Debug:                      opts.Debug,
 		RedactSensitiveInformation: opts.RedactSensitiveInformation,
 	}
 	instance := &agentcat.AgentCatInstance{
 		ProjectID: projectID,
 		Options:   coreOpts,
-		ServerRef: server,
 	}
 	agentcat.RegisterServer(server, instance)
 
-	middleware, sessionMap := newTrackingMiddleware(projectID, opts, mock.publish, serverImpl)
-	defer sessionMap.Stop()
+	middleware := newTrackingMiddleware(server, projectID, opts, mock.publish, serverImpl)
 	server.AddReceivingMiddleware(middleware)
 
 	// Register get_more_tools if enabled
@@ -106,6 +163,7 @@ func createTestServer(t *testing.T, opts *Options) (*mcp.Server, *mcp.ClientSess
 		t.Fatal(err)
 	}
 	client := mcp.NewClient(&mcp.Implementation{Name: "test-client", Version: "0.1.0"}, nil)
+	pinLegacyInitializeHandshake(client)
 	clientSession, err := client.Connect(ctx, t2, nil)
 	if err != nil {
 		t.Fatal(err)
@@ -144,12 +202,13 @@ func TestMiddleware_ToolCall_CreatesEvent(t *testing.T) {
 	}
 	if tc, ok := result.Content[0].(*mcp.TextContent); ok {
 		// With mcp.AddTool(), the typed result struct is JSON-serialized.
+		// (The v2 mint-back block is appended AFTER the customer content.)
 		if tc.Text != `{"text":"Hello, World!"}` {
 			t.Errorf("expected '{\"text\":\"Hello, World!\"}', got '%s'", tc.Text)
 		}
 	}
 
-	// Wait for the tool call event to be captured asynchronously
+	// Capture is synchronous, so the event is already published by now.
 	toolEvents := waitForEventType(mock, "mcp:tools/call", 1, 2*time.Second)
 
 	if len(toolEvents) == 0 {
@@ -169,18 +228,22 @@ func TestMiddleware_ToolCall_CreatesEvent(t *testing.T) {
 	if evt.ResourceName == nil || *evt.ResourceName != "greet" {
 		t.Errorf("expected resource name 'greet', got %v", evt.ResourceName)
 	}
-	if evt.GetSessionId() == "" {
-		t.Error("expected non-empty session ID")
+	if !strings.HasPrefix(evt.GetSessionId(), "ses_") {
+		t.Errorf("expected a minted ses_ session ID, got %q", evt.GetSessionId())
 	}
 	if evt.ProjectId != "proj_test" {
 		t.Errorf("expected project ID 'proj_test', got %v", evt.ProjectId)
 	}
 
-	// Check parameters
-	if evt.Parameters != nil {
-		if evt.Parameters["name"] != "greet" {
-			t.Errorf("expected param name 'greet', got %v", evt.Parameters["name"])
-		}
+	// Parameters record the raw request: tool name + arguments as sent.
+	if evt.Parameters == nil {
+		t.Fatal("expected non-nil parameters")
+	}
+	if evt.Parameters["name"] != "greet" {
+		t.Errorf("expected param name 'greet', got %v", evt.Parameters["name"])
+	}
+	if args, ok := evt.Parameters["arguments"].(map[string]any); !ok || args["name"] != "World" {
+		t.Errorf("expected raw arguments recorded, got %v", evt.Parameters["arguments"])
 	}
 }
 
@@ -204,16 +267,7 @@ func TestMiddleware_ToolCall_WithErrorResult(t *testing.T) {
 		t.Error("expected tool result to have IsError=true")
 	}
 
-	// Wait for events (init + notifications/initialized + tool call)
-	events := mock.waitForEvents(3, 2*time.Second)
-
-	var toolEvents []*agentcat.Event
-	for _, evt := range events {
-		if evt.EventType != nil && *evt.EventType == "mcp:tools/call" {
-			toolEvents = append(toolEvents, evt)
-		}
-	}
-
+	toolEvents := waitForEventType(mock, "mcp:tools/call", 1, 2*time.Second)
 	if len(toolEvents) == 0 {
 		t.Fatal("expected at least one tool call event")
 	}
@@ -257,17 +311,13 @@ func TestMiddleware_ToolsList_InjectsContext(t *testing.T) {
 
 	// Check that context param was injected into all tools
 	for _, tool := range tools {
-		schema := schemaToMap(tool.InputSchema)
-		if schema == nil {
-			t.Errorf("tool %s: expected non-nil schema", tool.Name)
-			continue
-		}
+		schema := marshalToMap(t, tool.InputSchema)
 		props, ok := schema["properties"].(map[string]any)
 		if !ok {
 			t.Errorf("tool %s: expected properties in schema", tool.Name)
 			continue
 		}
-		if _, exists := props[contextParamName]; !exists {
+		if _, exists := props["context"]; !exists {
 			t.Errorf("tool %s: expected context param to be injected", tool.Name)
 		}
 	}
@@ -294,55 +344,23 @@ func TestMiddleware_ToolsList_NoContextWhenDisabled(t *testing.T) {
 
 	// Check that context param was NOT injected
 	for _, tool := range tools {
-		schema := schemaToMap(tool.InputSchema)
-		if schema == nil {
-			continue
-		}
+		schema := marshalToMap(t, tool.InputSchema)
 		props, ok := schema["properties"].(map[string]any)
 		if !ok {
 			continue
 		}
-		if _, exists := props[contextParamName]; exists {
+		if _, exists := props["context"]; exists {
 			t.Errorf("tool %s: context param should NOT be injected when disabled", tool.Name)
 		}
 	}
 }
 
-func TestMiddleware_CapturesInitializeEvent(t *testing.T) {
-	_, _, mock, cleanup := createTestServer(t, nil)
-	defer cleanup()
-
-	// Wait for the initialize event that happens during connection
-	events := mock.waitForEvents(1, 2*time.Second)
-
-	var initEvents []*agentcat.Event
-	for _, evt := range events {
-		if evt.EventType != nil && *evt.EventType == "mcp:initialize" {
-			initEvents = append(initEvents, evt)
-		}
-	}
-
-	if len(initEvents) == 0 {
-		t.Fatal("expected at least one initialize event")
-	}
-
-	evt := initEvents[0]
-	if evt.GetSessionId() == "" {
-		t.Error("expected non-empty session ID")
-	}
-}
-
 func TestMiddleware_WithIdentify(t *testing.T) {
-	// The callback runs on detached capture goroutines (one per captured
-	// event), so the flag must be synchronized with the test goroutine.
+	// The callback runs once per tool call, on that call's goroutine,
+	// so the flag must be synchronized with the test goroutine.
 	var identifyCalled atomic.Bool
 	opts := DefaultOptions()
 	opts.Identify = func(ctx context.Context, request mcp.Request) *agentcat.UserIdentity {
-		// Gate to tool calls so initialize/notification captures do not emit
-		// identify events (waitForEvents below counts on exactly one).
-		if _, ok := request.(*mcp.CallToolRequest); !ok {
-			return nil
-		}
 		identifyCalled.Store(true)
 		return &agentcat.UserIdentity{
 			UserID:   "user_123",
@@ -365,48 +383,41 @@ func TestMiddleware_WithIdentify(t *testing.T) {
 		t.Fatalf("CallTool error: %v", err)
 	}
 
-	// Wait for events (init + notifications/initialized + identify + tool call)
-	// The identify event and tool call event are both published for the first tool call.
-	events := mock.waitForEvents(4, 3*time.Second)
+	// v2: the identity stamps the tool-call event itself; no separate
+	// agentcat:identify event is published.
+	toolEvents := waitForEventType(mock, "mcp:tools/call", 1, 3*time.Second)
+	if len(toolEvents) == 0 {
+		t.Fatal("expected a tool call event")
+	}
 
 	if !identifyCalled.Load() {
 		t.Error("expected Identify function to be called")
 	}
 
-	// Find the identify event
-	var identifyEvents []*agentcat.Event
-	for _, evt := range events {
-		if evt.EventType != nil && *evt.EventType == "agentcat:identify" {
-			identifyEvents = append(identifyEvents, evt)
-		}
+	evt := toolEvents[0]
+	if evt.IdentifyActorGivenId == nil || *evt.IdentifyActorGivenId != "user_123" {
+		t.Errorf("expected identify actor ID 'user_123' on the tool-call event, got %v", evt.IdentifyActorGivenId)
+	}
+	if evt.IdentifyActorName == nil || *evt.IdentifyActorName != "Test User" {
+		t.Errorf("expected identify actor name 'Test User' on the tool-call event, got %v", evt.IdentifyActorName)
+	}
+	if evt.IdentifyData["role"] != "admin" {
+		t.Errorf("expected identify data stamped, got %v", evt.IdentifyData)
 	}
 
-	if len(identifyEvents) == 0 {
-		t.Fatal("expected an identify event to be published")
-	}
-
-	identifyEvt := identifyEvents[0]
-	if identifyEvt.IdentifyActorGivenId == nil || *identifyEvt.IdentifyActorGivenId != "user_123" {
-		t.Errorf("expected identify actor ID 'user_123', got %v", identifyEvt.IdentifyActorGivenId)
-	}
-	if identifyEvt.IdentifyActorName == nil || *identifyEvt.IdentifyActorName != "Test User" {
-		t.Errorf("expected identify actor name 'Test User', got %v", identifyEvt.IdentifyActorName)
+	if identifies := filterEvents(mock.getEvents(), "agentcat:identify"); len(identifies) != 0 {
+		t.Errorf("v2 publishes no agentcat:identify events, got %d", len(identifies))
 	}
 }
 
-// TestMiddleware_IdentifyPublishesEveryTime verifies the identify callback
-// re-runs on every tool call and an agentcat:identify event is published every
-// time it returns a non-nil identity — even when the identity is unchanged.
-func TestMiddleware_IdentifyPublishesEveryTime(t *testing.T) {
+// TestMiddleware_IdentifyStampsEveryToolCall verifies the identify callback
+// re-runs on every tool call and each call's event is stamped with the
+// returned identity — even when the identity is unchanged (no dedup).
+func TestMiddleware_IdentifyStampsEveryToolCall(t *testing.T) {
 	identifyCount := 0
 	var mu sync.Mutex
 	opts := DefaultOptions()
 	opts.Identify = func(ctx context.Context, request mcp.Request) *agentcat.UserIdentity {
-		// Count and identify only tool calls so the expected event counts
-		// below stay deterministic.
-		if _, ok := request.(*mcp.CallToolRequest); !ok {
-			return nil
-		}
 		mu.Lock()
 		identifyCount++
 		mu.Unlock()
@@ -442,8 +453,7 @@ func TestMiddleware_IdentifyPublishesEveryTime(t *testing.T) {
 	}
 
 	// Wait for the second tool call event to be processed
-	waitForEventType(mock, "mcp:tools/call", 2, 2*time.Second)
-	events := mock.getEvents()
+	toolEvents := waitForEventType(mock, "mcp:tools/call", 2, 2*time.Second)
 
 	mu.Lock()
 	count := identifyCount
@@ -454,16 +464,14 @@ func TestMiddleware_IdentifyPublishesEveryTime(t *testing.T) {
 		t.Errorf("expected Identify to be called on each tool call (2), got %d", count)
 	}
 
-	// An identify event is published every time the callback returns a
-	// non-nil identity — no change-detection dedup.
-	identifyEvents := 0
-	for _, evt := range events {
-		if evt.EventType != nil && *evt.EventType == "agentcat:identify" {
-			identifyEvents++
-		}
+	// Every tool-call event is stamped — no change-detection dedup.
+	if len(toolEvents) != 2 {
+		t.Fatalf("expected 2 tool-call events, got %d", len(toolEvents))
 	}
-	if identifyEvents != 2 {
-		t.Errorf("expected 2 identify events (one per tool call, no dedup), got %d", identifyEvents)
+	for i, evt := range toolEvents {
+		if evt.IdentifyActorGivenId == nil || *evt.IdentifyActorGivenId != "user_123" {
+			t.Errorf("event %d not stamped with identity: %v", i, evt.IdentifyActorGivenId)
+		}
 	}
 }
 
@@ -487,16 +495,7 @@ func TestMiddleware_ToolCall_WithUserIntent(t *testing.T) {
 		t.Fatalf("CallTool error: %v", err)
 	}
 
-	// Wait for events (init + notifications/initialized + tool call)
-	events := mock.waitForEvents(3, 2*time.Second)
-
-	var toolEvents []*agentcat.Event
-	for _, evt := range events {
-		if evt.EventType != nil && *evt.EventType == "mcp:tools/call" {
-			toolEvents = append(toolEvents, evt)
-		}
-	}
-
+	toolEvents := waitForEventType(mock, "mcp:tools/call", 1, 2*time.Second)
 	if len(toolEvents) == 0 {
 		t.Fatal("expected at least one tool call event")
 	}
@@ -509,13 +508,10 @@ func TestMiddleware_ToolCall_WithUserIntent(t *testing.T) {
 		t.Errorf("expected intent 'Greeting the user for a welcome message', got '%s'", *evt.UserIntent)
 	}
 
-	// Verify context is filtered from parameters
-	if evt.Parameters != nil {
-		if args, ok := evt.Parameters["arguments"].(map[string]any); ok {
-			if _, hasContext := args["context"]; hasContext {
-				t.Error("context should be filtered from parameters")
-			}
-		}
+	// v2 records the raw request: context appears verbatim in the recorded
+	// arguments AND as user intent (the handler still never sees it).
+	if args, ok := evt.Parameters["arguments"].(map[string]any); !ok || args["context"] != "Greeting the user for a welcome message" {
+		t.Errorf("raw arguments must include context verbatim, got %v", evt.Parameters["arguments"])
 	}
 }
 
@@ -534,23 +530,15 @@ func TestMiddleware_CapturesSessionMetadata(t *testing.T) {
 		t.Fatalf("CallTool error: %v", err)
 	}
 
-	// Wait for events (init + notifications/initialized + tool call)
-	events := mock.waitForEvents(3, 2*time.Second)
-
-	var toolEvents []*agentcat.Event
-	for _, evt := range events {
-		if evt.EventType != nil && *evt.EventType == "mcp:tools/call" {
-			toolEvents = append(toolEvents, evt)
-		}
-	}
-
+	toolEvents := waitForEventType(mock, "mcp:tools/call", 1, 2*time.Second)
 	if len(toolEvents) == 0 {
 		t.Fatal("expected at least one tool call event")
 	}
 
 	evt := toolEvents[0]
 
-	// Verify session metadata
+	// Verify per-request metadata (legacy client: identity comes from the
+	// initialize-params fallback; server info from the Track-time impl).
 	if evt.SdkLanguage == nil || *evt.SdkLanguage != "Go" {
 		t.Errorf("expected SDK language 'Go', got %v", evt.SdkLanguage)
 	}
@@ -610,6 +598,100 @@ func TestMiddleware_GetMoreTools_NotRegisteredWhenDisabled(t *testing.T) {
 			t.Error("get_more_tools should NOT be registered when DisableReportMissing is true")
 			break
 		}
+	}
+}
+
+// TestStructuredContentAsMap pins the mirror's structuredContent conversion.
+// Typed mcp.AddTool stores structuredContent as json.RawMessage, so the
+// round-trip branch runs on every mirrored call: it must return an exact copy
+// of the customer's JSON object — numbers included — and must refuse anything
+// that is not a JSON object so the result is left untouched.
+func TestStructuredContentAsMap(t *testing.T) {
+	tests := []struct {
+		name   string
+		in     any
+		wantOK bool
+		want   string // canonical JSON of the returned map
+	}{
+		{name: "absent", in: nil, wantOK: false},
+		{name: "nil raw message", in: json.RawMessage(nil), wantOK: false},
+		{name: "map", in: map[string]any{"b": 2, "a": "x"}, wantOK: true, want: `{"a":"x","b":2}`},
+		{name: "empty map", in: map[string]any{}, wantOK: true, want: `{}`},
+		{name: "raw object", in: json.RawMessage(`{"text":"hi"}`), wantOK: true, want: `{"text":"hi"}`},
+		{name: "raw array", in: json.RawMessage(`[1,2,3]`), wantOK: false},
+		{name: "raw string", in: json.RawMessage(`"hello"`), wantOK: false},
+		{name: "raw number", in: json.RawMessage(`42`), wantOK: false},
+		{name: "raw null", in: json.RawMessage(`null`), wantOK: false},
+		{name: "raw invalid json", in: json.RawMessage(`{nope`), wantOK: false},
+		{name: "arbitrary value", in: struct {
+			N int `json:"n"`
+		}{N: 7}, wantOK: true, want: `{"n":7}`},
+		{
+			// The regression pin: float64 decoding would rewrite these as
+			// 9.007199254740992e+15 and friends — a changed VALUE, and
+			// schema-invalid against an "type":"integer" output schema.
+			name:   "large integers survive verbatim",
+			in:     json.RawMessage(`{"exact":9007199254740993,"id":1234567890123456789,"nested":{"huge":12345678901234567890},"ratio":1.5}`),
+			wantOK: true,
+			want:   `{"exact":9007199254740993,"id":1234567890123456789,"nested":{"huge":12345678901234567890},"ratio":1.5}`,
+		},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			got, ok := structuredContentAsMap(tc.in)
+			if ok != tc.wantOK {
+				t.Fatalf("ok = %v, want %v (got %v)", ok, tc.wantOK, got)
+			}
+			if !tc.wantOK {
+				if got != nil {
+					t.Errorf("non-object input must return a nil map, got %v", got)
+				}
+				return
+			}
+			raw, err := json.Marshal(got)
+			if err != nil {
+				t.Fatalf("re-marshal converted map: %v", err)
+			}
+			if string(raw) != tc.want {
+				t.Errorf("converted map = %s, want %s", raw, tc.want)
+			}
+		})
+	}
+
+	// The map branch must hand back a COPY: the caller writes the mirror key
+	// into the returned map, and the customer's own result must not change.
+	orig := map[string]any{"a": 1}
+	got, ok := structuredContentAsMap(orig)
+	if !ok {
+		t.Fatal("map input must convert")
+	}
+	got["_mcp_instructions"] = "mirror"
+	if _, leaked := orig["_mcp_instructions"]; leaked {
+		t.Error("conversion must copy: the customer's structuredContent was mutated")
+	}
+}
+
+// TestStripArgumentsSafely_PanicFallsBackToRawArgs pins the strip seam's panic
+// guard: the customer's call must dispatch with unmodified arguments rather
+// than fail, matching every other seam on the request path.
+func TestStripArgumentsSafely_PanicFallsBackToRawArgs(t *testing.T) {
+	raw := map[string]any{"session_id": sid("x"), "payload": "keep"}
+
+	got := stripArgumentsSafely(raw, func() map[string]any { panic("strip exploded") })
+	if len(got) != len(raw) || got["session_id"] != sid("x") || got["payload"] != "keep" {
+		t.Errorf("a panicking strip must fall back to the raw arguments, got %v", got)
+	}
+
+	// The happy path still strips.
+	got = stripArgumentsSafely(raw, func() map[string]any {
+		return agentcat.StripToolArguments("echo_args", raw, nil)
+	})
+	if _, has := got["session_id"]; has {
+		t.Errorf("injected params must be stripped on the normal path, got %v", got)
+	}
+	if got["payload"] != "keep" {
+		t.Errorf("real arguments must survive stripping, got %v", got)
 	}
 }
 

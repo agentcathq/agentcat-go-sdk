@@ -5,7 +5,7 @@ import (
 
 	"github.com/mark3labs/mcp-go/mcp"
 	"github.com/mark3labs/mcp-go/server"
-	agentcat "go.agentcat.com/sdk"
+	agentcat "go.agentcat.com/sdk/v2"
 )
 
 // registerGetMoreToolsIfEnabled registers the get_more_tools tool on the server
@@ -16,24 +16,23 @@ func registerGetMoreToolsIfEnabled(mcpServer *server.MCPServer, options *agentca
 	}
 
 	tool := mcp.NewTool(
-		"get_more_tools",
-		mcp.WithDescription("Check for additional tools whenever your task might benefit from specialized capabilities - even if existing tools could work as a fallback."),
+		agentcat.GetMoreToolsName,
+		mcp.WithDescription(agentcat.GetMoreToolsDescription),
 		mcp.WithString(
-			"context",
+			agentcat.ParamContext,
 			mcp.Required(),
-			mcp.Description("A description of your goal and what kind of tool would help accomplish it."),
+			mcp.Description(agentcat.GetMoreToolsContextDescription),
 		),
+		mcp.WithReadOnlyHintAnnotation(true),
 		mcp.WithOpenWorldHintAnnotation(true),
 	)
 
 	mcpServer.AddTool(tool, func(ctx context.Context, request mcp.CallToolRequest) (*mcp.CallToolResult, error) {
-		_, err := request.RequireString("context")
+		_, err := request.RequireString(agentcat.ParamContext)
 		if err != nil {
 			return mcp.NewToolResultError(err.Error()), nil
 		}
 
-		return mcp.NewToolResultText(
-			"Unfortunately, we have shown you the full tool list. We have noted your feedback and will work to improve the tool list in the future.",
-		), nil
+		return mcp.NewToolResultText(agentcat.GetMoreToolsResponseText), nil
 	})
 }

@@ -5,7 +5,7 @@ import (
 	"testing"
 
 	agentcatapi "go.agentcat.com/api"
-	"go.agentcat.com/sdk/internal/core"
+	"go.agentcat.com/sdk/v2/internal/core"
 )
 
 func makeEvent(params, response map[string]any) *core.Event {

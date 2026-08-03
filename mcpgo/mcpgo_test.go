@@ -3,11 +3,12 @@ package mcpgo
 import (
 	"context"
 	"errors"
+	"strings"
 	"testing"
 
 	"github.com/mark3labs/mcp-go/mcp"
 	"github.com/mark3labs/mcp-go/server"
-	agentcat "go.agentcat.com/sdk"
+	agentcat "go.agentcat.com/sdk/v2"
 )
 
 func TestTrack_NilServer(t *testing.T) {
@@ -79,33 +80,75 @@ func TestTrack_RegistersServer(t *testing.T) {
 	}
 }
 
+// TestTrack_CustomHooksPreserved verifies that hooks the customer registered
+// at construction survive Track: AgentCat composes with them via GetHooks()
+// instead of replacing them.
 func TestTrack_CustomHooksPreserved(t *testing.T) {
-	mcpServer := server.NewMCPServer("test-server", "1.0.0")
-	defer unregisterServer(mcpServer)
-
 	customHookCalled := false
 	customHooks := &server.Hooks{}
 	customHooks.AddBeforeAny(func(ctx context.Context, id any, method mcp.MCPMethod, message any) {
 		customHookCalled = true
 	})
 
-	opts := DefaultOptions()
-	opts.Hooks = customHooks
+	mcpServer := server.NewMCPServer(
+		"test-server",
+		"1.0.0",
+		server.WithToolCapabilities(true),
+		server.WithHooks(customHooks),
+	)
+	defer unregisterServer(mcpServer)
 
-	_, err := Track(mcpServer, "proj_789", opts)
+	_, err := Track(mcpServer, "proj_789", DefaultOptions())
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
 
-	// Verify hooks were merged: custom + MCPCat hooks
-	// The custom hooks struct should have at least 2 BeforeAny hooks:
-	// 1 from the custom hook + 1 from MCPCat tracing
-	if len(customHooks.OnBeforeAny) < 2 {
-		t.Fatalf("expected at least 2 BeforeAny hooks (custom + mcpcat), got %d", len(customHooks.OnBeforeAny))
+	// Drive a real request: both the customer's hook and AgentCat's list
+	// injection must run off the same Hooks struct.
+	mcpServer.HandleMessage(
+		context.Background(),
+		[]byte(`{"jsonrpc":"2.0","id":1,"method":"tools/list","params":{}}`),
+	)
+
+	if !customHookCalled {
+		t.Error("customer BeforeAny hook did not run after Track")
+	}
+	if instance := getMCPcat(mcpServer); instance == nil || instance.Registries.Load() == nil {
+		t.Error("AgentCat list injection did not run off the customer's hooks")
+	}
+}
+
+// TestTrack_IsIdempotentPerServer verifies that tracking the same server twice
+// installs one tool middleware, not two: a second installation would append a
+// second mint-back block to every wire response and publish a second event.
+func TestTrack_IsIdempotentPerServer(t *testing.T) {
+	mcpServer, _ := CreateTodoServerSimple()
+	instance := newTestInstance(mcpServer, "proj_twice", DefaultOptions())
+	agentcat.RegisterServer(mcpServer, instance)
+	t.Cleanup(func() { unregisterServer(mcpServer) })
+
+	mock := &mockPublisher{}
+	installTracking(mcpServer, instance, DefaultOptions(), mock.publish)
+
+	// A second Track on the same server must be a no-op.
+	if _, err := Track(mcpServer, "proj_twice", DefaultOptions()); err != nil {
+		t.Fatalf("second Track failed: %v", err)
 	}
 
-	// Verify the custom hook is still there (it was the first one appended)
-	_ = customHookCalled // hook reference preserved; tested via count
+	result := callToolRaw(t, mcpServer, "add_todo", map[string]any{"title": "once"})
+
+	mintBacks := 0
+	for _, content := range result.Content {
+		if tc, ok := content.(mcp.TextContent); ok && strings.Contains(tc.Text, "session_id issued") {
+			mintBacks++
+		}
+	}
+	if mintBacks != 1 {
+		t.Errorf("expected exactly 1 mint-back block on the wire, got %d", mintBacks)
+	}
+	if got := len(filterEvents(mock.getEvents(), "mcp:tools/call")); got != 1 {
+		t.Errorf("expected exactly 1 published event, got %d", got)
+	}
 }
 
 func TestTrack_CustomOptions(t *testing.T) {

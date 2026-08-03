@@ -2,7 +2,8 @@
 
 MODULES := . ./mcpgo ./officialsdk \
 	./examples/mcpgo/basic ./examples/mcpgo/advanced \
-	./examples/officialsdk/basic ./examples/officialsdk/advanced
+	./examples/officialsdk/basic ./examples/officialsdk/advanced \
+	./examples/officialsdk/factory
 
 # Default target
 all: fmt vet test
@@ -47,22 +48,31 @@ fmt-check:
 	@echo "Checking code formatting..."
 	@test -z "$$(gofmt -l .)" || (echo "The following files need formatting:" && gofmt -l . && exit 1)
 
-# Run go vet
+# Run go vet across every module. `go vet ./...` from the root reaches ONLY the
+# root module — nested modules are excluded from ./... with or without go.work —
+# so each module has to be vetted in its own directory, the same way
+# test-mcpgo/test-officialsdk exist because `make test` is root-only.
 vet:
 	@echo "Running go vet..."
-	@go vet ./...
+	@for mod in $(MODULES); do \
+		echo "  vetting $$mod"; \
+		(cd $$mod && go vet ./...) || exit 1; \
+	done
 
 # Build the project
 build:
 	@echo "Building..."
 	@go build ./...
 
-# Build example binaries into their respective directories
+# Build example binaries into their respective directories.
+# The `|| exit 1` is load-bearing: a shell for-loop exits with the status of its
+# LAST iteration, so without it a break in any example but the final one leaves
+# this target — and the CI job that runs it — green.
 build-examples:
 	@echo "Building examples..."
 	@for d in examples/*/*; do \
 		echo "  $$d"; \
-		(cd "$$d" && go build -o "$$(basename $$d)" .); \
+		(cd "$$d" && go build -o "$$(basename $$d)" .) || exit 1; \
 	done
 
 # Tidy up dependencies across all workspace modules
@@ -70,7 +80,7 @@ tidy:
 	@echo "Tidying dependencies..."
 	@for mod in $(MODULES); do \
 		echo "  tidying $$mod"; \
-		(cd $$mod && go mod tidy); \
+		(cd $$mod && go mod tidy) || exit 1; \
 	done
 
 # Run golangci-lint
@@ -96,11 +106,13 @@ run-examples: build-examples
 	@MCPCAT_PROJECT_ID=$${MCPCAT_PROJECT_ID:-proj_YOUR_PROJECT_ID} examples/mcpgo/advanced/advanced & echo "  mcpgo-advanced     (pid $$!) → http://localhost:8082/mcp"
 	@MCPCAT_PROJECT_ID=$${MCPCAT_PROJECT_ID:-proj_YOUR_PROJECT_ID} examples/officialsdk/basic/basic & echo "  officialsdk-basic  (pid $$!) → http://localhost:8083/mcp"
 	@MCPCAT_PROJECT_ID=$${MCPCAT_PROJECT_ID:-proj_YOUR_PROJECT_ID} examples/officialsdk/advanced/advanced & echo "  officialsdk-advanced (pid $$!) → http://localhost:8084/mcp"
+	@MCPCAT_PROJECT_ID=$${MCPCAT_PROJECT_ID:-proj_YOUR_PROJECT_ID} examples/officialsdk/factory/factory & echo "  officialsdk-factory  (pid $$!) → http://localhost:8080/mcp"
 	@echo "All servers started. Use 'make stop-examples' to stop them."
 
 # Stop all example servers (by the ports they listen on)
 stop-examples:
 	@echo "Stopping example servers..."
+	@-kill $$(lsof -ti:8080) 2>/dev/null
 	@-kill $$(lsof -ti:8081) 2>/dev/null
 	@-kill $$(lsof -ti:8082) 2>/dev/null
 	@-kill $$(lsof -ti:8083) 2>/dev/null

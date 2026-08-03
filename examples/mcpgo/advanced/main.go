@@ -1,8 +1,11 @@
 // Example: Full AgentCat integration with mark3labs/mcp-go
 //
-// This demonstrates all AgentCat options: user identification, sensitive data
-// redaction, debug logging, tool-call context capture, and missing-tool
-// reporting.
+// This demonstrates the AgentCat v2 options: per-call user identification,
+// agent tracking, sensitive data redaction, debug logging, tool-call context
+// capture, and missing-tool reporting. It also shows the hook-mode variant, in
+// which you supply your own correlation ID instead of letting the SDK inject a
+// session_id parameter, and how AgentCat composes with hooks you register
+// yourself.
 //
 // Usage:
 //
@@ -20,7 +23,7 @@ import (
 	"github.com/mark3labs/mcp-go/mcp"
 	"github.com/mark3labs/mcp-go/server"
 
-	agentcat "go.agentcat.com/sdk/mcpgo"
+	agentcat "go.agentcat.com/sdk/mcpgo/v2"
 )
 
 func processData(input string) error {
@@ -48,9 +51,19 @@ func dangerousOperation(input string) error {
 var emailRegex = regexp.MustCompile(`[a-zA-Z0-9._%+\-]+@[a-zA-Z0-9.\-]+\.[a-zA-Z]{2,}`)
 
 func main() {
+	// Hooks you register yourself keep working: AgentCat reads the server's
+	// hooks back with MCPServer.GetHooks() and appends its own to them, so
+	// register yours at construction time as usual. (v1's Options.Hooks field
+	// is gone — it existed only to hand AgentCat hooks it can now find itself.)
+	myHooks := &server.Hooks{}
+	myHooks.AddBeforeCallTool(func(ctx context.Context, id any, message *mcp.CallToolRequest) {
+		log.Printf("about to call %s", message.Params.Name)
+	})
+
 	s := server.NewMCPServer(
 		"mcpgo-advanced-example",
 		"1.0.0",
+		server.WithHooks(myHooks),
 	)
 
 	// --- AgentCat: full options ---
@@ -59,17 +72,22 @@ func main() {
 		projectID = "proj_YOUR_PROJECT_ID"
 	}
 	shutdown, err := agentcat.Track(s, projectID, &agentcat.Options{
-		// Write debug logs to ~/mcpcat.log.
+		// Write debug logs to ~/agentcat.log.
 		Debug: true,
 
-		// Identify the actor. The callback runs on every auto-captured event;
-		// type-assert the request to identify on tool calls only.
+		// Also inject a required "agent_id" parameter, so parallel agents
+		// working the same session can be told apart. Off by default. An omitted
+		// agent_id never rejects the call.
+		EnableAgentTracking: true,
+
+		// Identify the actor. In v2 this runs on every tool call, uncached,
+		// and stamps only that call's event — so keep it cheap and do NOT make
+		// network calls here. request is always the *mcp.CallToolRequest that
+		// triggered the event.
 		Identify: func(ctx context.Context, request any) *agentcat.UserIdentity {
-			if _, ok := request.(*mcp.CallToolRequest); !ok {
-				return nil // skip non-tool-call events
-			}
 			// In a real server you would extract identity from ctx, headers,
-			// or an auth token. Here we return a hard-coded example.
+			// or an already-parsed auth token. Here we return a hard-coded
+			// example.
 			return &agentcat.UserIdentity{
 				UserID:   "user-123",
 				UserName: "John Doe",
@@ -83,6 +101,32 @@ func main() {
 		RedactSensitiveInformation: func(text string) string {
 			return emailRegex.ReplaceAllString(text, "[REDACTED_EMAIL]")
 		},
+
+		// Both injected extras are on by default; uncomment to opt out.
+		//
+		// The "context" parameter asks the agent to explain why it is calling
+		// the tool, which is what powers user-intent analytics. Opting out
+		// keeps handle correlation but loses intent:
+		//
+		//	DisableToolCallContext: true,
+		//
+		// get_more_tools is an extra tool AgentCat registers so an agent can
+		// report capabilities you do not offer yet:
+		//
+		//	DisableReportMissing: true,
+
+		// Hook mode — an alternative to the injected session_id parameter.
+		// Setting ResolveSessionID stops AgentCat from injecting session_id into any
+		// tool and stops it from ever showing session instructions to the agent:
+		// you own correlation. Return your own ID (a workflow/trace/thread ID)
+		// and AgentCat derives the same ses_ session from it deterministically,
+		// across processes, restarts, and languages. Return "" or an error to
+		// silently mint a random session for that one call. Like Identify, it runs
+		// on every tool call — keep it cheap.
+		//
+		//	ResolveSessionID: func(ctx context.Context, request mcp.CallToolRequest) (string, error) {
+		//		return workflowIDFromContext(ctx), nil
+		//	},
 	})
 	if err != nil {
 		log.Fatalf("agentcat: %v", err)

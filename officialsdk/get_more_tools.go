@@ -5,7 +5,7 @@ import (
 
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 
-	agentcat "go.agentcat.com/sdk"
+	agentcat "go.agentcat.com/sdk/v2"
 )
 
 // registerGetMoreToolsIfEnabled registers the get_more_tools tool on the server
@@ -16,14 +16,15 @@ func registerGetMoreToolsIfEnabled(mcpServer *mcp.Server, options *agentcat.Opti
 	}
 
 	tool := &mcp.Tool{
-		Name:        "get_more_tools",
-		Description: "Check for additional tools whenever your task might benefit from specialized capabilities - even if existing tools could work as a fallback.",
+		Name:        agentcat.GetMoreToolsName,
+		Description: agentcat.GetMoreToolsDescription,
+		Annotations: &mcp.ToolAnnotations{ReadOnlyHint: true},
 		InputSchema: map[string]any{
 			"type": "object",
 			"properties": map[string]any{
 				"context": map[string]any{
 					"type":        "string",
-					"description": "A description of your goal and what kind of tool would help accomplish it.",
+					"description": agentcat.GetMoreToolsContextDescription,
 				},
 			},
 			"required": []string{"context"},
@@ -45,7 +46,7 @@ func registerGetMoreToolsIfEnabled(mcpServer *mcp.Server, options *agentcat.Opti
 		return &mcp.CallToolResult{
 			Content: []mcp.Content{
 				&mcp.TextContent{
-					Text: "Unfortunately, we have shown you the full tool list. We have noted your feedback and will work to improve the tool list in the future.",
+					Text: agentcat.GetMoreToolsResponseText,
 				},
 			},
 		}, nil

@@ -6,7 +6,7 @@ Thank you for your interest in contributing to the AgentCat Go SDK! This documen
 
 ### Prerequisites
 
-- **Go 1.23 or later** - This project requires Go 1.23+
+- **Go 1.25 or later** - The adapter modules declare `go 1.25` (mcpgo pins `1.25.5`)
 - **Git** - For version control
 - A GitHub account for submitting pull requests
 

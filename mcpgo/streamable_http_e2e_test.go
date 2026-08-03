@@ -3,6 +3,7 @@ package mcpgo
 import (
 	"context"
 	"fmt"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"testing"
@@ -11,7 +12,7 @@ import (
 	"github.com/mark3labs/mcp-go/client"
 	"github.com/mark3labs/mcp-go/mcp"
 	"github.com/mark3labs/mcp-go/server"
-	agentcat "go.agentcat.com/sdk"
+	agentcat "go.agentcat.com/sdk/v2"
 )
 
 // setupStreamableHTTP creates a real HTTP-based MCP client that exercises the
@@ -196,6 +197,136 @@ func TestStreamableHTTP_IdentifyRerun(t *testing.T) {
 	if countAfterSecond <= countAfterFirst {
 		t.Errorf("expected Identify to be re-run on the second call (count > %d), got %d",
 			countAfterFirst, countAfterSecond)
+	}
+}
+
+// callSpyTool drives a tool call through a spy-backed client.
+func callSpyTool(t *testing.T, c *client.Client, name string, args map[string]any) *mcp.CallToolResult {
+	t.Helper()
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	req := mcp.CallToolRequest{}
+	req.Params.Name = name
+	req.Params.Arguments = args
+	result, err := c.CallTool(ctx, req)
+	if err != nil {
+		t.Fatalf("CallTool(%q): %v", name, err)
+	}
+	return result
+}
+
+// TestStreamableHTTP_FullSessionPublishesOnlyToolCalls drives the whole MCP
+// surface the fixture exposes over a real HTTP transport and pins the v2 rule:
+// tool calls are the only thing that publishes.
+func TestStreamableHTTP_FullSessionPublishesOnlyToolCalls(t *testing.T) {
+	mcpClient, mock := setupSpyHTTP(t, nil)
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+
+	if _, err := mcpClient.ListTools(ctx, mcp.ListToolsRequest{}); err != nil {
+		t.Fatalf("ListTools: %v", err)
+	}
+	readReq := mcp.ReadResourceRequest{}
+	readReq.Params.URI = "todo://about"
+	if _, err := mcpClient.ReadResource(ctx, readReq); err != nil {
+		t.Fatalf("ReadResource: %v", err)
+	}
+	promptReq := mcp.GetPromptRequest{}
+	promptReq.Params.Name = "summarize_todos"
+	promptReq.Params.Arguments = map[string]string{"style": "brief"}
+	if _, err := mcpClient.GetPrompt(ctx, promptReq); err != nil {
+		t.Fatalf("GetPrompt: %v", err)
+	}
+	for _, title := range []string{"one", "two"} {
+		callSpyTool(t, mcpClient, "add_todo", map[string]any{"title": title})
+	}
+
+	mock.waitForEvents(2, 3*time.Second)
+	settleForAbsentEvents()
+
+	events := mock.getEvents()
+	for _, e := range events {
+		if e.EventType == nil || *e.EventType != "mcp:tools/call" {
+			t.Errorf("unexpected event type %v — v2 publishes only tool calls", e.EventType)
+		}
+	}
+	if got := len(events); got != 2 {
+		t.Errorf("expected exactly 2 events for 2 tool calls, got %d (%v)", got, eventTypes(events))
+	}
+}
+
+// TestStreamableHTTP_SuppliedSessionRoundTrips pins that a session_id supplied by the
+// agent survives a real HTTP hop: every call carrying it is attributed to it,
+// and none of them re-mints.
+func TestStreamableHTTP_SuppliedSessionRoundTrips(t *testing.T) {
+	mcpClient, mock := setupSpyHTTP(t, nil)
+
+	session := sid("http_supplied")
+	for _, title := range []string{"first", "second"} {
+		result := callSpyTool(t, mcpClient, "add_todo", map[string]any{"title": title, "session_id": session})
+		for _, c := range result.Content {
+			if tc, ok := c.(mcp.TextContent); ok && strings.Contains(tc.Text, "session_id issued") {
+				t.Errorf("call %s re-minted a session the agent already supplied", title)
+			}
+		}
+	}
+
+	mock.waitForEvents(2, 3*time.Second)
+	events := filterEvents(mock.getEvents(), "mcp:tools/call")
+	if len(events) != 2 {
+		t.Fatalf("expected 2 tool-call events, got %d", len(events))
+	}
+	for i, evt := range events {
+		if evt.GetSessionId() != session {
+			t.Errorf("event %d attributed to %q, want %q", i, evt.GetSessionId(), session)
+		}
+		if evt.Tags == nil || (*evt.Tags)[agentcat.TagSessionSource] != string(agentcat.SessionSourceSupplied) {
+			t.Errorf("event %d session source tag = %v, want %q", i, evt.Tags, agentcat.SessionSourceSupplied)
+		}
+	}
+}
+
+// TestStreamableHTTP_IdentityStampsEveryCallNoIdentifyEvents pins the v2
+// identify contract over a real transport: the callback runs on every tool
+// call, its result stamps that call's event, and no separate identify event is
+// ever published.
+func TestStreamableHTTP_IdentityStampsEveryCallNoIdentifyEvents(t *testing.T) {
+	var identifyCount atomic.Int32
+	opts := DefaultOptions()
+	opts.Identify = func(ctx context.Context, request any) *agentcat.UserIdentity {
+		identifyCount.Add(1)
+		return &agentcat.UserIdentity{
+			UserID:   "http-actor",
+			UserName: "HTTP Actor",
+			UserData: map[string]any{"plan": "pro"},
+		}
+	}
+
+	mcpClient, mock := setupSpyHTTP(t, opts)
+	for _, title := range []string{"first", "second"} {
+		callSpyTool(t, mcpClient, "add_todo", map[string]any{"title": title})
+	}
+
+	mock.waitForEvents(2, 3*time.Second)
+	settleForAbsentEvents()
+
+	events := filterEvents(mock.getEvents(), "mcp:tools/call")
+	if len(events) != 2 {
+		t.Fatalf("expected 2 tool-call events, got %d", len(events))
+	}
+	if got := identifyCount.Load(); got != 2 {
+		t.Errorf("Identify ran %d times, want once per tool call (2)", got)
+	}
+	for i, evt := range events {
+		if evt.IdentifyActorGivenId == nil || *evt.IdentifyActorGivenId != "http-actor" {
+			t.Errorf("event %d not stamped with the actor: %v", i, evt.IdentifyActorGivenId)
+		}
+		if evt.IdentifyData["plan"] != "pro" {
+			t.Errorf("event %d not stamped with identify data: %v", i, evt.IdentifyData)
+		}
+	}
+	if identifies := filterEvents(mock.getEvents(), "agentcat:identify"); len(identifies) != 0 {
+		t.Errorf("v2 publishes no agentcat:identify events, got %d", len(identifies))
 	}
 }
 

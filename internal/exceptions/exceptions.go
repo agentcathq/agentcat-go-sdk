@@ -289,6 +289,12 @@ func extractPackage(funcName string) string {
 	return funcName
 }
 
+func isAgentCatSDKPackage(pkg string) bool {
+	return strings.HasPrefix(pkg, "go.agentcat.com/sdk/v2") ||
+		strings.HasPrefix(pkg, "go.agentcat.com/sdk/mcpgo/v2") ||
+		strings.HasPrefix(pkg, "go.agentcat.com/sdk/officialsdk/v2")
+}
+
 func shouldSkipFrame(funcName string) bool {
 	pkg := extractPackage(funcName)
 
@@ -296,8 +302,7 @@ func shouldSkipFrame(funcName string) bool {
 		return true
 	}
 
-	if strings.HasPrefix(pkg, "go.agentcat.com/sdk") &&
-		!strings.HasSuffix(pkg, "_test") {
+	if isAgentCatSDKPackage(pkg) && !strings.HasSuffix(pkg, "_test") {
 		return true
 	}
 

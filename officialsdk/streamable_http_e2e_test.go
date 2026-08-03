@@ -12,22 +12,32 @@ import (
 
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 
-	agentcat "go.agentcat.com/sdk"
+	agentcat "go.agentcat.com/sdk/v2"
 )
 
 // setupStreamableHTTP creates a todo server with MCPCat tracking, exposes it
 // over an httptest server using StreamableHTTP transport, and returns a
 // connected client session along with the backing TodoStore and mockPublisher.
+//
+// This is the STATEFUL shape: one long-lived server behind a session-bearing
+// handler. See setupStreamableHTTPWith for the stateless variants.
 func setupStreamableHTTP(t *testing.T, opts *Options) (*mcp.ClientSession, *TodoStore, *mockPublisher) {
+	t.Helper()
+	return setupStreamableHTTPWith(t, opts, &mcp.StreamableHTTPOptions{JSONResponse: true}, false)
+}
+
+// setupStreamableHTTPWith is setupStreamableHTTP with explicit transport
+// options and an optional pre-2026 client. One server instance serves every
+// request, so in stateless mode the instance is long-lived while the session
+// is not — the shape a customer gets from a single mcp.NewServer behind a
+// sessionless deployment. (The per-request factory shape is covered in
+// factory_e2e_test.go.)
+func setupStreamableHTTPWith(t *testing.T, opts *Options, httpOpts *mcp.StreamableHTTPOptions, legacyClient bool) (*mcp.ClientSession, *TodoStore, *mockPublisher) {
 	t.Helper()
 
 	server, store, mock := createFullTestServerWithTracking(t, opts)
 
-	handler := mcp.NewStreamableHTTPHandler(
-		func(r *http.Request) *mcp.Server { return server },
-		&mcp.StreamableHTTPOptions{JSONResponse: true},
-	)
-
+	handler := mcp.NewStreamableHTTPHandler(func(r *http.Request) *mcp.Server { return server }, httpOpts)
 	httpServer := httptest.NewServer(handler)
 
 	transport := &mcp.StreamableClientTransport{
@@ -35,6 +45,9 @@ func setupStreamableHTTP(t *testing.T, opts *Options) (*mcp.ClientSession, *Todo
 	}
 
 	client := mcp.NewClient(&mcp.Implementation{Name: "http-test-client", Version: "2.0.0"}, nil)
+	if legacyClient {
+		pinLegacyInitializeHandshake(client)
+	}
 	clientSession, err := client.Connect(context.Background(), transport, nil)
 	if err != nil {
 		httpServer.Close()
@@ -67,9 +80,7 @@ func TestHTTP_ToolCall_FullPipeline(t *testing.T) {
 		t.Fatal("expected non-empty content")
 	}
 
-	events := mock.waitForEvents(3, 3*time.Second)
-	toolEvents := filterEvents(events, "mcp:tools/call")
-
+	toolEvents := waitForEventType(mock, "mcp:tools/call", 1, 3*time.Second)
 	if len(toolEvents) == 0 {
 		t.Fatal("expected at least one mcp:tools/call event")
 	}
@@ -88,8 +99,8 @@ func TestHTTP_ToolCall_FullPipeline(t *testing.T) {
 	if evt.ResourceName == nil || *evt.ResourceName != "add_todo" {
 		t.Errorf("expected resource name 'add_todo', got %v", evt.ResourceName)
 	}
-	if evt.GetSessionId() == "" {
-		t.Error("expected non-empty session ID")
+	if !strings.HasPrefix(evt.GetSessionId(), "ses_") {
+		t.Errorf("expected a minted ses_ session ID, got %q", evt.GetSessionId())
 	}
 	if evt.ProjectId != "proj_test" {
 		t.Errorf("expected project ID 'proj_test', got %v", evt.ProjectId)
@@ -112,9 +123,7 @@ func TestHTTP_ErrorToolCall(t *testing.T) {
 		t.Fatal("expected tool result to have IsError=true")
 	}
 
-	events := mock.waitForEvents(3, 3*time.Second)
-	toolEvents := filterEvents(events, "mcp:tools/call")
-
+	toolEvents := waitForEventType(mock, "mcp:tools/call", 1, 3*time.Second)
 	if len(toolEvents) == 0 {
 		t.Fatal("expected at least one mcp:tools/call event")
 	}
@@ -138,16 +147,11 @@ func TestHTTP_ErrorToolCall(t *testing.T) {
 }
 
 func TestHTTP_IdentifyInvoked(t *testing.T) {
-	// The callback runs on detached capture goroutines (one per captured
-	// event), so the flag must be synchronized with the test goroutine.
+	// The callback runs once per tool call, on that call's goroutine,
+	// so the flag must be synchronized with the test goroutine.
 	var identifyCalled atomic.Bool
 	opts := DefaultOptions()
 	opts.Identify = func(ctx context.Context, request mcp.Request) *agentcat.UserIdentity {
-		// Gate to tool calls so initialize/notification captures do not emit
-		// identify events (waitForEvents below counts on exactly one).
-		if _, ok := request.(*mcp.CallToolRequest); !ok {
-			return nil
-		}
 		identifyCalled.Store(true)
 		return &agentcat.UserIdentity{
 			UserID:   "http_user_789",
@@ -167,41 +171,41 @@ func TestHTTP_IdentifyInvoked(t *testing.T) {
 		t.Fatalf("CallTool error: %v", err)
 	}
 
-	// Wait for events: init + notifications/initialized + identify + tool call
-	events := mock.waitForEvents(4, 3*time.Second)
+	// v2: the identity stamps the tool-call event; there is no separate
+	// agentcat:identify event.
+	toolEvents := waitForEventType(mock, "mcp:tools/call", 1, 3*time.Second)
+	if len(toolEvents) == 0 {
+		t.Fatal("expected an mcp:tools/call event")
+	}
 
 	if !identifyCalled.Load() {
 		t.Error("expected Identify function to be called")
 	}
 
-	identifyEvents := filterEvents(events, "agentcat:identify")
-	if len(identifyEvents) == 0 {
-		t.Fatal("expected an agentcat:identify event to be published")
-	}
-
-	evt := identifyEvents[0]
-
+	evt := toolEvents[0]
 	if evt.IdentifyActorGivenId == nil || *evt.IdentifyActorGivenId != "http_user_789" {
-		t.Errorf("expected identify actor ID 'http_user_789', got %v", evt.IdentifyActorGivenId)
+		t.Errorf("expected identify actor ID 'http_user_789' on the event, got %v", evt.IdentifyActorGivenId)
 	}
 	if evt.IdentifyActorName == nil || *evt.IdentifyActorName != "HTTP E2E User" {
-		t.Errorf("expected identify actor name 'HTTP E2E User', got %v", evt.IdentifyActorName)
+		t.Errorf("expected identify actor name 'HTTP E2E User' on the event, got %v", evt.IdentifyActorName)
+	}
+	if evt.IdentifyData["plan"] != "enterprise" {
+		t.Errorf("expected identify data stamped on the event, got %v", evt.IdentifyData)
+	}
+
+	if identifies := filterEvents(mock.getEvents(), "agentcat:identify"); len(identifies) != 0 {
+		t.Errorf("v2 publishes no agentcat:identify events, got %d", len(identifies))
 	}
 }
 
-// TestHTTP_IdentifyPublishesEveryTime verifies the identify callback re-runs
-// on every tool call and an agentcat:identify event is published every time it
-// returns a non-nil identity — even when the identity is unchanged.
-func TestHTTP_IdentifyPublishesEveryTime(t *testing.T) {
+// TestHTTP_IdentifyStampsEveryToolCall verifies the identify callback re-runs
+// on every tool call and stamps each call's event — even when the identity is
+// unchanged (no change-detection dedup).
+func TestHTTP_IdentifyStampsEveryToolCall(t *testing.T) {
 	var mu sync.Mutex
 	identifyCount := 0
 	opts := DefaultOptions()
 	opts.Identify = func(ctx context.Context, request mcp.Request) *agentcat.UserIdentity {
-		// Count and identify only tool calls so the expected event counts
-		// below stay deterministic.
-		if _, ok := request.(*mcp.CallToolRequest); !ok {
-			return nil
-		}
 		mu.Lock()
 		identifyCount++
 		mu.Unlock()
@@ -224,7 +228,7 @@ func TestHTTP_IdentifyPublishesEveryTime(t *testing.T) {
 	}
 
 	// Wait for the first tool call event to be processed
-	mock.waitForEvents(3, 3*time.Second)
+	waitForEventType(mock, "mcp:tools/call", 1, 3*time.Second)
 
 	// Second tool call in the same session
 	_, err = clientSession.CallTool(ctx, &mcp.CallToolParams{
@@ -235,9 +239,7 @@ func TestHTTP_IdentifyPublishesEveryTime(t *testing.T) {
 		t.Fatalf("second CallTool error: %v", err)
 	}
 
-	// Wait for second tool call events
-	// (init, notification, 2x tools/call, 2x identify).
-	events := mock.waitForEvents(6, 3*time.Second)
+	toolEvents := waitForEventType(mock, "mcp:tools/call", 2, 3*time.Second)
 
 	mu.Lock()
 	count := identifyCount
@@ -248,16 +250,14 @@ func TestHTTP_IdentifyPublishesEveryTime(t *testing.T) {
 		t.Errorf("expected Identify to be called on each tool call (2), got %d", count)
 	}
 
-	// An identify event is published every time the callback returns a
-	// non-nil identity — no change-detection dedup.
-	identifyEvents := 0
-	for _, evt := range events {
-		if evt.EventType != nil && *evt.EventType == "agentcat:identify" {
-			identifyEvents++
-		}
+	// Every tool-call event is stamped with the returned identity.
+	if len(toolEvents) != 2 {
+		t.Fatalf("expected 2 tool-call events, got %d", len(toolEvents))
 	}
-	if identifyEvents != 2 {
-		t.Errorf("expected 2 identify events (one per tool call, no dedup), got %d", identifyEvents)
+	for i, evt := range toolEvents {
+		if evt.IdentifyActorGivenId == nil || *evt.IdentifyActorGivenId != "rerun_user" {
+			t.Errorf("event %d not stamped with identity: %v", i, evt.IdentifyActorGivenId)
+		}
 	}
 }
 
@@ -273,15 +273,16 @@ func TestHTTP_SessionMetadata(t *testing.T) {
 		t.Fatalf("CallTool error: %v", err)
 	}
 
-	events := mock.waitForEvents(3, 3*time.Second)
-	toolEvents := filterEvents(events, "mcp:tools/call")
-
+	toolEvents := waitForEventType(mock, "mcp:tools/call", 1, 3*time.Second)
 	if len(toolEvents) == 0 {
 		t.Fatal("expected at least one mcp:tools/call event")
 	}
 
 	evt := toolEvents[0]
 
+	// The 2026-protocol client sends identity in per-request _meta; the
+	// event must carry it either way (the accessor falls back to the legacy
+	// initialize capture for older clients).
 	if evt.SdkLanguage == nil || *evt.SdkLanguage != "Go" {
 		t.Errorf("expected SDK language 'Go', got %v", evt.SdkLanguage)
 	}
@@ -299,6 +300,8 @@ func TestHTTP_SessionMetadata(t *testing.T) {
 	}
 }
 
+// TestHTTP_ResourceRead verifies resource reads pass through untouched and —
+// per the v2 design — publish no event.
 func TestHTTP_ResourceRead(t *testing.T) {
 	clientSession, store, mock := setupStreamableHTTP(t, nil)
 	ctx := context.Background()
@@ -319,29 +322,14 @@ func TestHTTP_ResourceRead(t *testing.T) {
 		t.Errorf("expected resource contents to contain 'HTTP resource test todo', got %s", result.Contents[0].Text)
 	}
 
-	events := mock.waitForEvents(3, 3*time.Second)
-	resourceEvents := filterEvents(events, "mcp:resources/read")
-
-	if len(resourceEvents) == 0 {
-		t.Fatal("expected at least one mcp:resources/read event")
-	}
-
-	evt := resourceEvents[0]
-
-	if evt.EventType == nil || *evt.EventType != "mcp:resources/read" {
-		t.Errorf("expected event type 'mcp:resources/read', got %v", evt.EventType)
-	}
-	if evt.ResourceName == nil || *evt.ResourceName != "todo://list" {
-		t.Errorf("expected resource name 'todo://list', got %v", evt.ResourceName)
-	}
-	if evt.Duration == nil || *evt.Duration < 0 {
-		t.Error("expected non-negative duration")
-	}
-	if evt.GetSessionId() == "" {
-		t.Error("expected non-empty session ID")
+	settleForAbsentEvents()
+	if events := mock.getEvents(); len(events) != 0 {
+		t.Errorf("v2 publishes no resources/read events, got %d event(s)", len(events))
 	}
 }
 
+// TestHTTP_PromptGet verifies prompt requests pass through untouched and —
+// per the v2 design — publish no event.
 func TestHTTP_PromptGet(t *testing.T) {
 	clientSession, _, mock := setupStreamableHTTP(t, nil)
 	ctx := context.Background()
@@ -360,30 +348,196 @@ func TestHTTP_PromptGet(t *testing.T) {
 		t.Fatal("expected non-empty messages")
 	}
 
-	events := mock.waitForEvents(3, 3*time.Second)
-	promptEvents := filterEvents(events, "mcp:prompts/get")
+	settleForAbsentEvents()
+	if events := mock.getEvents(); len(events) != 0 {
+		t.Errorf("v2 publishes no prompts/get events, got %d event(s)", len(events))
+	}
+}
 
-	if len(promptEvents) == 0 {
-		t.Fatal("expected at least one mcp:prompts/get event")
-	}
+// TestHTTP_FullSessionPublishesOnlyToolCalls drives the whole MCP surface the
+// fixture exposes over a real HTTP transport and pins the v2 rule: tool calls
+// are the only thing that publishes.
+func TestHTTP_FullSessionPublishesOnlyToolCalls(t *testing.T) {
+	clientSession, store, mock := setupStreamableHTTP(t, nil)
+	ctx := context.Background()
+	store.add("seed")
 
-	evt := promptEvents[0]
-
-	if evt.EventType == nil || *evt.EventType != "mcp:prompts/get" {
-		t.Errorf("expected event type 'mcp:prompts/get', got %v", evt.EventType)
+	if _, err := clientSession.ListTools(ctx, &mcp.ListToolsParams{}); err != nil {
+		t.Fatalf("ListTools: %v", err)
 	}
-	if evt.Duration == nil || *evt.Duration < 0 {
-		t.Error("expected non-negative duration")
+	if _, err := clientSession.ReadResource(ctx, &mcp.ReadResourceParams{URI: "todo://list"}); err != nil {
+		t.Fatalf("ReadResource: %v", err)
 	}
-	if evt.GetSessionId() == "" {
-		t.Error("expected non-empty session ID")
+	if _, err := clientSession.GetPrompt(ctx, &mcp.GetPromptParams{
+		Name: "summarize_todos", Arguments: map[string]string{"style": "brief"},
+	}); err != nil {
+		t.Fatalf("GetPrompt: %v", err)
 	}
-	if evt.Parameters != nil {
-		if evt.Parameters["name"] != "summarize_todos" {
-			t.Errorf("expected param name 'summarize_todos', got %v", evt.Parameters["name"])
+	for _, title := range []string{"one", "two"} {
+		if _, err := clientSession.CallTool(ctx, &mcp.CallToolParams{
+			Name: "add_todo", Arguments: map[string]any{"title": title},
+		}); err != nil {
+			t.Fatalf("CallTool %s: %v", title, err)
 		}
-	} else {
-		t.Error("expected non-nil parameters")
+	}
+
+	waitForEventType(mock, "mcp:tools/call", 2, 3*time.Second)
+	settleForAbsentEvents()
+
+	events := mock.getEvents()
+	for _, e := range events {
+		if e.EventType == nil || *e.EventType != "mcp:tools/call" {
+			t.Errorf("unexpected event type %v — v2 publishes only tool calls", e.EventType)
+		}
+	}
+	if got := len(events); got != 2 {
+		t.Errorf("expected exactly 2 events for 2 tool calls, got %d (%v)", got, eventTypes(events))
+	}
+}
+
+// TestHTTP_SuppliedSessionRoundTrips pins that a session_id supplied by the agent
+// survives a real HTTP hop: every call carrying it is attributed to it, and
+// none of them re-mints.
+func TestHTTP_SuppliedSessionRoundTrips(t *testing.T) {
+	clientSession, _, mock := setupStreamableHTTP(t, nil)
+	ctx := context.Background()
+
+	session := sid("http_supplied")
+	for _, title := range []string{"first", "second"} {
+		res, err := clientSession.CallTool(ctx, &mcp.CallToolParams{
+			Name:      "add_todo",
+			Arguments: map[string]any{"title": title, "session_id": session},
+		})
+		if err != nil {
+			t.Fatalf("CallTool %s: %v", title, err)
+		}
+		for _, c := range res.Content {
+			if tc, ok := c.(*mcp.TextContent); ok && strings.Contains(tc.Text, "session_id issued") {
+				t.Errorf("call %s re-minted a session the agent already supplied", title)
+			}
+		}
+	}
+
+	events := waitForEventType(mock, "mcp:tools/call", 2, 3*time.Second)
+	if len(events) != 2 {
+		t.Fatalf("expected 2 tool-call events, got %d", len(events))
+	}
+	for i, evt := range events {
+		if evt.GetSessionId() != session {
+			t.Errorf("event %d attributed to %q, want %q", i, evt.GetSessionId(), session)
+		}
+		if evt.Tags == nil || (*evt.Tags)[agentcat.TagSessionSource] != string(agentcat.SessionSourceSupplied) {
+			t.Errorf("event %d session source tag = %v, want %q", i, evt.Tags, agentcat.SessionSourceSupplied)
+		}
+	}
+}
+
+// TestHTTP_StatelessSharedServer covers the sessionless HTTP deployment of a
+// single long-lived server: no Mcp-Session-Id, a fresh temporary session per
+// request, and every tool call still resolved, minted, and published.
+func TestHTTP_StatelessSharedServer(t *testing.T) {
+	clientSession, _, mock := setupStreamableHTTPWith(t, nil,
+		&mcp.StreamableHTTPOptions{Stateless: true, JSONResponse: true}, false)
+	ctx := context.Background()
+
+	res, err := clientSession.CallTool(ctx, &mcp.CallToolParams{
+		Name:      "add_todo",
+		Arguments: map[string]any{"title": "stateless", "context": "why"},
+	})
+	if err != nil {
+		t.Fatalf("CallTool: %v", err)
+	}
+	if res.IsError {
+		t.Fatalf("stateless call failed: %v", res.Content)
+	}
+
+	events := waitForEventType(mock, "mcp:tools/call", 1, 3*time.Second)
+	if len(events) != 1 {
+		t.Fatalf("expected exactly 1 mcp:tools/call event in stateless mode, got %d", len(events))
+	}
+	evt := events[0]
+	minted := evt.GetSessionId()
+	if !strings.HasPrefix(minted, "ses_") {
+		t.Errorf("expected a minted ses_ session, got %q", minted)
+	}
+	if got := lastText(t, res); got != mintBackFor(minted) {
+		t.Errorf("stateless mint-back = %q, want %q", got, mintBackFor(minted))
+	}
+	if evt.UserIntent == nil || *evt.UserIntent != "why" {
+		t.Errorf("user intent = %v, want %q", evt.UserIntent, "why")
+	}
+
+	// A second call supplying that session is attributed to it — correlation
+	// survives with no transport session to carry it.
+	if _, err := clientSession.CallTool(ctx, &mcp.CallToolParams{
+		Name:      "add_todo",
+		Arguments: map[string]any{"title": "stateless 2", "session_id": minted},
+	}); err != nil {
+		t.Fatalf("second CallTool: %v", err)
+	}
+	events = waitForEventType(mock, "mcp:tools/call", 2, 3*time.Second)
+	if len(events) != 2 {
+		t.Fatalf("expected 2 tool-call events, got %d", len(events))
+	}
+	// Calls may overlap, so the second call's event is selected by the title
+	// it carried — never by arrival order.
+	second := eventByToolArg(t, events, "title", "stateless 2")
+	if second.GetSessionId() != minted {
+		t.Errorf("second stateless call attributed to %q, want %q", second.GetSessionId(), minted)
+	}
+}
+
+// eventByToolArg returns the one event whose recorded (raw) arguments have
+// key=value, failing if there is not exactly one. Selecting an event by what
+// the agent sent is order-independent; indexing into mock.events is not,
+// because concurrent tool calls capture on their own goroutines.
+func eventByToolArg(t *testing.T, events []*agentcat.Event, key, value string) *agentcat.Event {
+	t.Helper()
+	var found *agentcat.Event
+	n := 0
+	for _, evt := range events {
+		args, _ := evt.Parameters["arguments"].(map[string]any)
+		if args[key] == value {
+			found = evt
+			n++
+		}
+	}
+	if n != 1 {
+		t.Fatalf("expected exactly 1 event with argument %s=%q, got %d", key, value, n)
+	}
+	return found
+}
+
+// TestHTTP_StatefulLegacyClient covers the pre-2026 client over stateful HTTP:
+// client identity comes from the initialize handshake rather than per-request
+// _meta, and the call path behaves identically.
+func TestHTTP_StatefulLegacyClient(t *testing.T) {
+	clientSession, _, mock := setupStreamableHTTPWith(t, nil,
+		&mcp.StreamableHTTPOptions{JSONResponse: true}, true)
+	ctx := context.Background()
+
+	if _, err := clientSession.CallTool(ctx, &mcp.CallToolParams{
+		Name:      "add_todo",
+		Arguments: map[string]any{"title": "legacy client", "session_id": sid("http_legacy")},
+	}); err != nil {
+		t.Fatalf("CallTool: %v", err)
+	}
+
+	events := waitForEventType(mock, "mcp:tools/call", 1, 3*time.Second)
+	settleForAbsentEvents()
+	if got := len(mock.getEvents()); got != 1 {
+		t.Fatalf("expected exactly 1 event, got %d (%v)", got, eventTypes(mock.getEvents()))
+	}
+
+	evt := events[0]
+	if evt.ClientName == nil || *evt.ClientName != "http-test-client" {
+		t.Errorf("legacy client identity lost: client name = %v", evt.ClientName)
+	}
+	if evt.ClientVersion == nil || *evt.ClientVersion != "2.0.0" {
+		t.Errorf("legacy client identity lost: client version = %v", evt.ClientVersion)
+	}
+	if evt.GetSessionId() != sid("http_legacy") {
+		t.Errorf("event attributed to %q, want ses_http_legacy", evt.GetSessionId())
 	}
 }
 
@@ -404,9 +558,7 @@ func TestHTTP_UserIntent(t *testing.T) {
 		t.Fatalf("CallTool error: %v", err)
 	}
 
-	events := mock.waitForEvents(3, 3*time.Second)
-	toolEvents := filterEvents(events, "mcp:tools/call")
-
+	toolEvents := waitForEventType(mock, "mcp:tools/call", 1, 3*time.Second)
 	if len(toolEvents) == 0 {
 		t.Fatal("expected at least one mcp:tools/call event")
 	}
@@ -420,17 +572,16 @@ func TestHTTP_UserIntent(t *testing.T) {
 		t.Errorf("expected specific intent string, got '%s'", *evt.UserIntent)
 	}
 
-	// Verify context is filtered from parameters
-	if evt.Parameters != nil {
-		if args, ok := evt.Parameters["arguments"].(map[string]any); ok {
-			if _, hasContext := args["context"]; hasContext {
-				t.Error("context should be filtered from parameters")
-			}
-			// The title argument should still be present
-			if _, hasTitle := args["title"]; !hasTitle {
-				t.Error("expected 'title' argument to remain in parameters")
-			}
+	// v2 records the raw request: context and title both appear verbatim.
+	if args, ok := evt.Parameters["arguments"].(map[string]any); ok {
+		if args["context"] != "Adding a todo to verify user intent tracking over HTTP transport" {
+			t.Errorf("raw arguments must include context verbatim, got %v", args)
 		}
+		if _, hasTitle := args["title"]; !hasTitle {
+			t.Error("expected 'title' argument to remain in parameters")
+		}
+	} else {
+		t.Errorf("expected recorded arguments map, got %v", evt.Parameters)
 	}
 }
 
@@ -461,9 +612,7 @@ func TestHTTP_GetMoreTools(t *testing.T) {
 		}
 	}
 
-	events := mock.waitForEvents(3, 3*time.Second)
-	toolEvents := filterEvents(events, "mcp:tools/call")
-
+	toolEvents := waitForEventType(mock, "mcp:tools/call", 1, 3*time.Second)
 	if len(toolEvents) == 0 {
 		t.Fatal("expected at least one mcp:tools/call event for get_more_tools")
 	}
@@ -484,8 +633,8 @@ func TestHTTP_GetMoreTools(t *testing.T) {
 	if getMoreToolsEvt.EventType == nil || *getMoreToolsEvt.EventType != "mcp:tools/call" {
 		t.Errorf("expected event type 'mcp:tools/call', got %v", getMoreToolsEvt.EventType)
 	}
-	if getMoreToolsEvt.GetSessionId() == "" {
-		t.Error("expected non-empty session ID")
+	if !strings.HasPrefix(getMoreToolsEvt.GetSessionId(), "ses_") {
+		t.Errorf("expected a minted ses_ session ID, got %q", getMoreToolsEvt.GetSessionId())
 	}
 }
 
@@ -501,9 +650,7 @@ func TestHTTP_ExtraDataCaptured(t *testing.T) {
 		t.Fatalf("CallTool error: %v", err)
 	}
 
-	events := mock.waitForEvents(3, 3*time.Second)
-	toolEvents := filterEvents(events, "mcp:tools/call")
-
+	toolEvents := waitForEventType(mock, "mcp:tools/call", 1, 3*time.Second)
 	if len(toolEvents) == 0 {
 		t.Fatal("expected at least one mcp:tools/call event")
 	}
@@ -550,17 +697,13 @@ func TestHTTP_ContextParamInjection(t *testing.T) {
 	}
 
 	for _, tool := range tools {
-		schema := schemaToMap(tool.InputSchema)
-		if schema == nil {
-			t.Errorf("tool %s: expected non-nil schema", tool.Name)
-			continue
-		}
+		schema := marshalToMap(t, tool.InputSchema)
 		props, ok := schema["properties"].(map[string]any)
 		if !ok {
 			t.Errorf("tool %s: expected properties in schema", tool.Name)
 			continue
 		}
-		if _, exists := props[contextParamName]; !exists {
+		if _, exists := props["context"]; !exists {
 			t.Errorf("tool %s: expected context param to be injected", tool.Name)
 		}
 	}

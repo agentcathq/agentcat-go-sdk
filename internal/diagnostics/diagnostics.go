@@ -7,8 +7,8 @@ import (
 	"sync"
 	"time"
 
-	"go.agentcat.com/sdk/internal/logging"
-	"go.agentcat.com/sdk/internal/session"
+	"go.agentcat.com/sdk/v2/internal/core"
+	"go.agentcat.com/sdk/v2/internal/logging"
 )
 
 var (
@@ -51,7 +51,7 @@ func Init(projectID string, disabled bool, integration, mcpSDKPath string) {
 	}
 
 	attrs := buildStaticAttributes(projectID, integration, mcpSDKPath)
-	ver := session.GetDependencyVersion(sdkModulePath)
+	ver := core.GetDependencyVersion(sdkModulePath)
 
 	mu.Lock()
 	staticAttrs = attrs

@@ -4,8 +4,8 @@ import (
 	"context"
 	"sync"
 
-	"go.agentcat.com/sdk/internal/core"
-	"go.agentcat.com/sdk/internal/logging"
+	"go.agentcat.com/sdk/v2/internal/core"
+	"go.agentcat.com/sdk/v2/internal/logging"
 )
 
 // Manager fans events out to a set of configured telemetry exporters.

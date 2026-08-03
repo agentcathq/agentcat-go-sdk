@@ -4,10 +4,8 @@ import (
 	"context"
 	"strings"
 	"testing"
-	"time"
 
-	"go.agentcat.com/sdk/internal/core"
-	"go.agentcat.com/sdk/internal/publisher"
+	"go.agentcat.com/sdk/v2/internal/publisher"
 )
 
 // testServer is a dummy type to satisfy the registry's pointer requirement.
@@ -18,7 +16,6 @@ func TestRegisterServer_And_GetInstance(t *testing.T) {
 	instance := &MCPcatInstance{
 		ProjectID: "proj_123",
 		Options:   &Options{},
-		ServerRef: server,
 	}
 
 	RegisterServer(server, instance)
@@ -109,45 +106,6 @@ func TestSetDebug(t *testing.T) {
 	SetDebug(false)
 }
 
-func TestNewEvent(t *testing.T) {
-	sess := &Session{
-		ProjectID: core.Ptr("proj_123"),
-		SessionID: core.Ptr("ses_abc"),
-	}
-	duration := int32(100)
-	evt := NewEvent(sess, "tool_call", &duration, false, nil)
-
-	if evt == nil {
-		t.Fatal("NewEvent returned nil")
-	}
-}
-
-func TestNewEvent_WithError(t *testing.T) {
-	sess := &Session{
-		ProjectID: core.Ptr("proj_123"),
-	}
-	evt := NewEvent(sess, "tool_call", nil, true, context.DeadlineExceeded)
-
-	if evt == nil {
-		t.Fatal("NewEvent returned nil")
-	}
-}
-
-func TestNewSessionID(t *testing.T) {
-	id := NewSessionID()
-
-	prefix := string(PrefixSession) + "_"
-	if !strings.HasPrefix(id, prefix) {
-		t.Errorf("NewSessionID() = %q, want prefix %q", id, prefix)
-	}
-
-	// Uniqueness
-	id2 := NewSessionID()
-	if id == id2 {
-		t.Error("two calls to NewSessionID returned the same value")
-	}
-}
-
 func TestNewEventID(t *testing.T) {
 	id := NewEventID()
 
@@ -173,20 +131,6 @@ func TestGetDependencyVersion(t *testing.T) {
 	ver = GetDependencyVersion("github.com/nonexistent/package")
 	if ver != "dev" {
 		t.Errorf("expected \"dev\" for unknown dep, got %q", ver)
-	}
-}
-
-func TestCreateIdentifyEvent(t *testing.T) {
-	sess := &Session{
-		ProjectID:            core.Ptr("proj_123"),
-		SessionID:            core.Ptr("ses_abc"),
-		IdentifyActorGivenId: core.Ptr("user_1"),
-		IdentifyActorName:    core.Ptr("Test User"),
-	}
-
-	evt := CreateIdentifyEvent(sess)
-	if evt == nil {
-		t.Fatal("CreateIdentifyEvent returned nil")
 	}
 }
 
@@ -319,24 +263,5 @@ func TestDefaultOptions_Wrapper(t *testing.T) {
 	}
 	if opts.Debug {
 		t.Error("expected Debug false")
-	}
-}
-
-func TestNewSessionMap_Wrapper(t *testing.T) {
-	m := NewSessionMap(0)
-	defer m.Stop()
-
-	if m == nil {
-		t.Fatal("NewSessionMap returned nil")
-	}
-}
-
-func TestNewSessionMap_CustomTTL(t *testing.T) {
-	ttl := 5 * time.Minute
-	m := NewSessionMap(ttl)
-	defer m.Stop()
-
-	if m == nil {
-		t.Fatal("NewSessionMap returned nil")
 	}
 }

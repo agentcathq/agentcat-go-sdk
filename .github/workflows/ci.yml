@@ -8,11 +8,8 @@ on:
 
 jobs:
   test:
-    name: Test (Go ${{ matrix.go-version }})
+    name: Test (all modules, Go stable)
     runs-on: ubuntu-latest
-    strategy:
-      matrix:
-        go-version: ['1.24', 'stable']
 
     steps:
     - name: Check out code
@@ -21,7 +18,7 @@ jobs:
     - name: Set up Go
       uses: actions/setup-go@v5
       with:
-        go-version: ${{ matrix.go-version }}
+        go-version: 'stable'
 
     - name: Download dependencies
       run: |
@@ -36,12 +33,44 @@ jobs:
         cd ../officialsdk && go test -v -race -coverprofile=coverage-officialsdk.out ./...
 
     - name: Upload coverage
-      if: matrix.go-version == 'stable'
       uses: codecov/codecov-action@v4
       with:
         files: ./coverage-root.out,./mcpgo/coverage-mcpgo.out,./officialsdk/coverage-officialsdk.out
         fail_ci_if_error: false
       continue-on-error: true
+
+  # The ROOT module alone still declares `go 1.24`, so this leg is what keeps
+  # it buildable and testable on 1.24. It deliberately does NOT cover the
+  # adapters: mcpgo declares `go 1.25.5` and officialsdk `go 1.25.0`, so a
+  # 1.24 toolchain would silently download and switch to 1.25 for them and the
+  # leg would prove nothing about 1.24 at all.
+  test-root-go124:
+    name: Test (root module only, Go 1.24)
+    runs-on: ubuntu-latest
+
+    steps:
+    - name: Check out code
+      uses: actions/checkout@v4
+
+    - name: Set up Go
+      uses: actions/setup-go@v5
+      with:
+        go-version: '1.24'
+
+    - name: Run root module tests
+      env:
+        # Fail loudly instead of switching toolchains if the root module's
+        # `go` directive ever moves past 1.24.
+        GOTOOLCHAIN: local
+        # go.work is gitignored, so a fresh checkout has none and this is a
+        # no-op on the runner. It is set anyway so the job stays hermetic if a
+        # workspace is ever committed, and so the command reproduces locally,
+        # where go.work exists and declares go 1.25.5 — which GOTOOLCHAIN=local
+        # would otherwise refuse before doing any work.
+        GOWORK: "off"
+      run: |
+        go mod download
+        go test -race ./...
 
   format:
     name: Format Check
@@ -65,3 +94,42 @@ jobs:
           echo "Please run 'go fmt ./...' to format your code"
           exit 1
         fi
+
+  vet:
+    name: Vet
+    runs-on: ubuntu-latest
+
+    steps:
+    - name: Check out code
+      uses: actions/checkout@v4
+
+    - name: Set up Go
+      uses: actions/setup-go@v5
+      with:
+        # The adapter modules declare go 1.25; stable avoids a toolchain download.
+        go-version: 'stable'
+
+    # `go vet ./...` from the repo root covers ONLY the root module — nested
+    # modules are excluded from ./... — so the make target vets each module in
+    # its own directory. Running it here keeps CI and the local gate identical.
+    - name: Run go vet
+      run: make vet
+
+  build-examples:
+    name: Build Examples
+    runs-on: ubuntu-latest
+
+    steps:
+    - name: Check out code
+      uses: actions/checkout@v4
+
+    - name: Set up Go
+      uses: actions/setup-go@v5
+      with:
+        go-version: 'stable'
+
+    # Every example is a real module with its own go.mod. go.work is gitignored,
+    # so this builds them exactly as a customer cloning the repo would: each
+    # example resolved standalone through its own replace directives.
+    - name: Build examples
+      run: make build-examples

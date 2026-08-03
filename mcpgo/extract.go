@@ -5,108 +5,26 @@ import (
 	"reflect"
 
 	"github.com/mark3labs/mcp-go/mcp"
-	agentcat "go.agentcat.com/sdk"
+	agentcat "go.agentcat.com/sdk/v2"
 )
 
-// extractUserIntentFromRequest extracts the context parameter from a tool call request.
-func extractUserIntentFromRequest(request any) string {
-	if toolReq, ok := request.(*mcp.CallToolRequest); ok {
-		if args := toolReq.GetArguments(); args != nil {
-			if contextVal, ok := args["context"].(string); ok {
-				return contextVal
-			}
-		}
-	}
-	return ""
-}
-
-// extractParameters extracts parameters from the request based on its type.
-func extractParameters(request any) map[string]any {
-	params := make(map[string]any)
-
-	switch req := request.(type) {
-	case *mcp.CallToolRequest:
-		params["name"] = req.Params.Name
-		if args := req.GetArguments(); args != nil {
-			filteredArgs := make(map[string]any)
-			for k, v := range args {
-				if k != "context" {
-					filteredArgs[k] = v
-				}
-			}
-			if len(filteredArgs) > 0 {
-				params["arguments"] = filteredArgs
-			}
-		}
-	case *mcp.ReadResourceRequest:
-		params["uri"] = req.Params.URI
-	case *mcp.GetPromptRequest:
-		params["name"] = req.Params.Name
-		if len(req.Params.Arguments) > 0 {
-			params["arguments"] = req.Params.Arguments
-		}
-	case *mcp.InitializeRequest:
-		params["protocolVersion"] = req.Params.ProtocolVersion
-		params["clientInfo"] = agentcat.ConvertToMap(req.Params.ClientInfo)
-	}
-
-	if len(params) == 0 {
+// extractResponse renders a tool call's result for the published event. Only
+// tools/call results are recorded: v2 publishes no other event type.
+func extractResponse(result *mcp.CallToolResult) map[string]any {
+	if result == nil {
 		return nil
 	}
-	return params
-}
 
-// extractResponse extracts response data based on the response type.
-func extractResponse(response any) map[string]any {
 	resp := make(map[string]any)
-
-	switch r := response.(type) {
-	case *mcp.CallToolResult:
-		if r.StructuredContent != nil {
-			resp["structuredContent"] = agentcat.ConvertToMap(r.StructuredContent)
-		}
-		if len(r.Content) > 0 {
-			resp["content"] = agentcat.ConvertToMap(r.Content)
-		}
-		resp["isError"] = r.IsError
-	case *mcp.ReadResourceResult:
-		if len(r.Contents) > 0 {
-			resp["contents"] = agentcat.ConvertToMap(r.Contents)
-		}
-	case *mcp.GetPromptResult:
-		resp["description"] = r.Description
-		if len(r.Messages) > 0 {
-			resp["messages"] = agentcat.ConvertToMap(r.Messages)
-		}
-	case *mcp.InitializeResult:
-		resp["protocolVersion"] = r.ProtocolVersion
-		resp["serverInfo"] = agentcat.ConvertToMap(r.ServerInfo)
-	case *mcp.ListToolsResult:
-		if len(r.Tools) > 0 {
-			resp["tools"] = agentcat.ConvertToMap(r.Tools)
-		}
+	if result.StructuredContent != nil {
+		resp["structuredContent"] = agentcat.ConvertToMap(result.StructuredContent)
 	}
-
-	if len(resp) == 0 {
-		return nil
+	if len(result.Content) > 0 {
+		resp["content"] = agentcat.ConvertToMap(result.Content)
 	}
+	resp["isError"] = result.IsError
+
 	return resp
-}
-
-// extractResourceName extracts the resource URI from a resource read request.
-func extractResourceName(request any) string {
-	if resourceReq, ok := request.(*mcp.ReadResourceRequest); ok {
-		return resourceReq.Params.URI
-	}
-	return ""
-}
-
-// extractToolName extracts the tool name from a tool call request.
-func extractToolName(request any) string {
-	if toolReq, ok := request.(*mcp.CallToolRequest); ok {
-		return toolReq.Params.Name
-	}
-	return ""
 }
 
 // extractExtra extracts transport-layer metadata from the request message.

@@ -5,6 +5,7 @@ import (
 	"testing"
 
 	"github.com/mark3labs/mcp-go/mcp"
+	"github.com/mark3labs/mcp-go/server"
 )
 
 // TestGetMoreTools_RegisteredAndCallable verifies that when DisableReportMissing
@@ -95,6 +96,20 @@ func TestGetMoreTools_NotRegisteredWhenDisabled(t *testing.T) {
 	for _, tool := range toolsResult.Tools {
 		if tool.Name == "get_more_tools" {
 			t.Error("get_more_tools should NOT be registered when DisableReportMissing=true")
+		}
+	}
+}
+
+// TestGetMoreTools_NilOptionsRegistersNothing verifies that the registration
+// helper is safe with nil options and registers nothing.
+func TestGetMoreTools_NilOptionsRegistersNothing(t *testing.T) {
+	mcpServer := server.NewMCPServer("nil-options-server", "1.0.0", server.WithToolCapabilities(true))
+
+	registerGetMoreToolsIfEnabled(mcpServer, nil)
+
+	for _, serverTool := range mcpServer.ListTools() {
+		if serverTool.Tool.Name == "get_more_tools" {
+			t.Error("get_more_tools must not be registered when options are nil")
 		}
 	}
 }

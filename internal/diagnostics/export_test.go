@@ -8,7 +8,7 @@ import (
 	"strings"
 	"testing"
 
-	"go.agentcat.com/sdk/internal/logging"
+	"go.agentcat.com/sdk/v2/internal/logging"
 )
 
 func TestExport_PostsOTLPWithAuth(t *testing.T) {

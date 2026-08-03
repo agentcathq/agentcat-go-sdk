@@ -62,8 +62,9 @@ func TestConcurrentToolsList_ContextInjection_NoSharedToolMutation(t *testing.T)
 
 // TestConcurrentIdentifyChanges_NoRace hammers tool calls while the Identify
 // callback keeps returning different identities with UserData maps, verifying
-// (under -race) that identity merge, session mutation, and identify-event
-// publishing in the async capture goroutines are properly synchronized.
+// (under -race) that per-call resolution, decoration, and identity stamping
+// are properly synchronized across concurrent calls. They must never
+// cross-attribute: state flows through locals only.
 func TestConcurrentIdentifyChanges_NoRace(t *testing.T) {
 	var n atomic.Int64
 	opts := DefaultOptions()
@@ -102,8 +103,14 @@ func TestConcurrentIdentifyChanges_NoRace(t *testing.T) {
 	}
 	wg.Wait()
 
-	identifies := waitForEventType(mock, "agentcat:identify", 1, 5*time.Second)
-	if len(identifies) == 0 {
-		t.Error("expected at least one identify event from changing identities")
+	toolEvents := waitForEventType(mock, "mcp:tools/call", 1, 5*time.Second)
+	if len(toolEvents) == 0 {
+		t.Fatal("expected tool-call events from the hammer")
+	}
+	for _, evt := range toolEvents {
+		if evt.IdentifyActorGivenId == nil {
+			t.Error("every tool-call event must be stamped with its call's identity")
+			break
+		}
 	}
 }

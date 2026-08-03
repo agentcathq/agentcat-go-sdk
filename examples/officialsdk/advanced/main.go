@@ -1,8 +1,10 @@
 // Example: Full AgentCat integration with the official Go MCP SDK
 //
-// This demonstrates all AgentCat options: user identification, sensitive data
-// redaction, debug logging, tool-call context capture, and missing-tool
-// reporting.
+// This demonstrates the AgentCat v2 options: per-call user identification,
+// agent tracking, sensitive data redaction, debug logging, tool-call context
+// capture, and missing-tool reporting. It also shows the hook-mode variant, in
+// which you supply your own correlation ID instead of letting the SDK inject a
+// session_id parameter.
 //
 // Usage:
 //
@@ -20,7 +22,7 @@ import (
 
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 
-	agentcat "go.agentcat.com/sdk/officialsdk"
+	agentcat "go.agentcat.com/sdk/officialsdk/v2"
 )
 
 func processData(input string) error {
@@ -78,17 +80,22 @@ func main() {
 		projectID = "proj_YOUR_PROJECT_ID"
 	}
 	shutdown, err := agentcat.Track(s, projectID, &agentcat.Options{
-		// Write debug logs to ~/mcpcat.log.
+		// Write debug logs to ~/agentcat.log.
 		Debug: true,
 
-		// Identify the actor. The callback runs on every auto-captured event;
-		// type-assert the request to identify on tool calls only.
+		// Also inject a required "agent_id" parameter, so parallel agents
+		// working the same session can be told apart. Off by default. An omitted
+		// agent_id never rejects the call.
+		EnableAgentTracking: true,
+
+		// Identify the actor. In v2 this runs on every tool call, uncached,
+		// and stamps only that call's event — so keep it cheap and do NOT make
+		// network calls here. request is always the *mcp.CallToolRequest that
+		// triggered the event.
 		Identify: func(ctx context.Context, request mcp.Request) *agentcat.UserIdentity {
-			if _, ok := request.(*mcp.CallToolRequest); !ok {
-				return nil // skip non-tool-call events
-			}
 			// In a real server you would extract identity from ctx, headers,
-			// or an auth token. Here we return a hard-coded example.
+			// or an already-parsed auth token. Here we return a hard-coded
+			// example.
 			return &agentcat.UserIdentity{
 				UserID:   "user-123",
 				UserName: "John Doe",
@@ -102,6 +109,32 @@ func main() {
 		RedactSensitiveInformation: func(text string) string {
 			return emailRegex.ReplaceAllString(text, "[REDACTED_EMAIL]")
 		},
+
+		// Both injected extras are on by default; uncomment to opt out.
+		//
+		// The "context" parameter asks the agent to explain why it is calling
+		// the tool, which is what powers user-intent analytics. Opting out
+		// keeps handle correlation but loses intent:
+		//
+		//	DisableToolCallContext: true,
+		//
+		// get_more_tools is an extra tool AgentCat registers so an agent can
+		// report capabilities you do not offer yet:
+		//
+		//	DisableReportMissing: true,
+
+		// Hook mode — an alternative to the injected session_id parameter.
+		// Setting ResolveSessionID stops AgentCat from injecting session_id into any
+		// tool and stops it from ever showing session instructions to the agent:
+		// you own correlation. Return your own ID (a workflow/trace/thread ID)
+		// and AgentCat derives the same ses_ session from it deterministically,
+		// across processes, restarts, and languages. Return "" or an error to
+		// silently mint a random session for that one call. Like Identify, it runs
+		// on every tool call — keep it cheap.
+		//
+		//	ResolveSessionID: func(ctx context.Context, req mcp.Request) (string, error) {
+		//		return workflowIDFromContext(ctx), nil
+		//	},
 	})
 	if err != nil {
 		log.Fatalf("agentcat: %v", err)

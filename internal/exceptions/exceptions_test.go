@@ -302,14 +302,14 @@ func TestShouldSkipFrame(t *testing.T) {
 		{"testing.tRunner", true},
 		{"testing.(*T).Run", true},
 		// MCPCat SDK frames should be skipped
-		{"go.agentcat.com/sdk/internal/exceptions.CaptureException", true},
-		{"go.agentcat.com/sdk/internal/event.NewEvent", true},
-		{"go.agentcat.com/sdk/internal/publisher.(*Publisher).Publish", true},
-		{"go.agentcat.com/sdk/mcpgo.addTracingToHooks", true},
-		{"go.agentcat.com/sdk/officialsdk.newTrackingMiddleware", true},
+		{"go.agentcat.com/sdk/v2/internal/exceptions.CaptureException", true},
+		{"go.agentcat.com/sdk/v2/internal/event.NewEvent", true},
+		{"go.agentcat.com/sdk/v2/internal/publisher.(*Publisher).Publish", true},
+		{"go.agentcat.com/sdk/mcpgo/v2.addTracingToHooks", true},
+		{"go.agentcat.com/sdk/officialsdk/v2.newTrackingMiddleware", true},
 		// MCPCat SDK _test packages should NOT be skipped (needed for testing)
-		{"go.agentcat.com/sdk/internal/exceptions_test.TestShouldSkipFrame", false},
-		{"go.agentcat.com/sdk/mcpgo_test.TestErrorTracking", false},
+		{"go.agentcat.com/sdk/v2/internal/exceptions_test.TestShouldSkipFrame", false},
+		{"go.agentcat.com/sdk/mcpgo/v2_test.TestErrorTracking", false},
 		// User code should NOT be skipped
 		{"github.com/mycompany/myapp/handler.ProcessTool", false},
 		{"main.main", false},

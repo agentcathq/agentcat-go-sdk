@@ -56,7 +56,7 @@ func TestRedaction_PanicInRedactFnDoesNotCrashServer(t *testing.T) {
 
 	// First tool call -- should NOT crash despite the panic in redaction.
 	result1 := h.callTool("add_todo", map[string]any{
-		"title":       "Secret task",
+		"title":       "Secret session",
 		"description": "Contains sensitive data",
 	})
 
@@ -67,7 +67,7 @@ func TestRedaction_PanicInRedactFnDoesNotCrashServer(t *testing.T) {
 	result2 := h.callTool("list_todos", map[string]any{})
 
 	text2 := resultText(result2)
-	assertContains(t, text2, "Secret task")
+	assertContains(t, text2, "Secret session")
 }
 
 // TestRedaction_NilRedactFnDoesNotInterfere verifies that when

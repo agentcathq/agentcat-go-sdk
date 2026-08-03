@@ -12,8 +12,8 @@ import (
 	"time"
 
 	"github.com/segmentio/ksuid"
-	"go.agentcat.com/sdk/internal/core"
-	"go.agentcat.com/sdk/internal/logging"
+	"go.agentcat.com/sdk/v2/internal/core"
+	"go.agentcat.com/sdk/v2/internal/logging"
 )
 
 // defaultPostHogHost is the default PostHog ingestion host (US region).
@@ -127,7 +127,13 @@ type posthogCaptureEvent struct {
 // PostHog as a single batch.
 func (e *PostHogExporter) Export(event *core.Event) error {
 	// Compute the deterministic session UUID once; every batch entry uses it.
-	sessionUUID := ToUUIDv7(event.GetSessionId())
+	// A sessionless event has nothing to key on, and ToUUIDv7("") is a single
+	// fixed UUID — emitting it would collapse every sessionless event across
+	// every server onto one synthetic PostHog session. Empty means "omit".
+	var sessionUUID string
+	if id := event.GetSessionId(); id != "" {
+		sessionUUID = ToUUIDv7(id)
+	}
 
 	batch := []posthogCaptureEvent{e.buildCaptureEvent(event, sessionUUID)}
 
@@ -160,9 +166,9 @@ func (e *PostHogExporter) Export(event *core.Event) error {
 
 func (e *PostHogExporter) buildCaptureEvent(event *core.Event, sessionUUID string) posthogCaptureEvent {
 	properties := map[string]any{
-		"$session_id": sessionUUID,
-		"source":      sourceValue,
+		"source": sourceValue,
 	}
+	setIfNotEmpty(properties, "$session_id", sessionUUID)
 
 	if rn := event.GetResourceName(); rn != "" {
 		properties["resource_name"] = rn
@@ -223,8 +229,8 @@ func (e *PostHogExporter) buildCaptureEvent(event *core.Event, sessionUUID strin
 func (e *PostHogExporter) buildExceptionEvent(event *core.Event, sessionUUID string) posthogCaptureEvent {
 	properties := map[string]any{
 		"$exception_source": "backend",
-		"$session_id":       sessionUUID,
 	}
+	setIfNotEmpty(properties, "$session_id", sessionUUID)
 
 	if event.Error != nil {
 		if msg, ok := event.Error["message"].(string); ok && msg != "" {
@@ -260,15 +266,24 @@ func (e *PostHogExporter) buildExceptionEvent(event *core.Event, sessionUUID str
 }
 
 func (e *PostHogExporter) buildAISpanEvent(event *core.Event, sessionUUID string) posthogCaptureEvent {
-	properties := map[string]any{
-		"$ai_session_id": "agentcat_" + event.GetSessionId(),
-		"$ai_trace_id":   sessionUUID,
-		"$ai_span_id":    ToUUIDv7(event.GetId()),
-		"$ai_span_name":  orDefault(event.GetResourceName(), "unknown_tool"),
-		"$ai_is_error":   event.GetIsError(),
-		"$session_id":    sessionUUID,
-		"source":         sourceValue,
+	// Without a session the span still stands alone: it keeps its own span ID
+	// and traces under the event rather than under a session that never
+	// existed. $ai_session_id and $session_id are simply absent.
+	traceID := sessionUUID
+	if traceID == "" {
+		traceID = ToUUIDv7(event.GetId())
 	}
+	properties := map[string]any{
+		"$ai_trace_id":  traceID,
+		"$ai_span_id":   ToUUIDv7(event.GetId()),
+		"$ai_span_name": orDefault(event.GetResourceName(), "unknown_tool"),
+		"$ai_is_error":  event.GetIsError(),
+		"source":        sourceValue,
+	}
+	if id := event.GetSessionId(); id != "" {
+		properties["$ai_session_id"] = "agentcat_" + id
+	}
+	setIfNotEmpty(properties, "$session_id", sessionUUID)
 
 	if event.Duration != nil {
 		properties["$ai_latency"] = float64(*event.Duration) / 1000

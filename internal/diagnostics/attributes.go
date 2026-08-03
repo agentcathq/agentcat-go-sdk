@@ -7,7 +7,7 @@ import (
 	"runtime"
 	"strconv"
 
-	"go.agentcat.com/sdk/internal/session"
+	"go.agentcat.com/sdk/v2/internal/core"
 )
 
 // computeInstallID returns a stable, anonymous 16-hex-char id derived from the
@@ -36,8 +36,8 @@ func buildStaticAttributes(projectID, integration, mcpSDKPath string) []otlpAttr
 	}
 
 	add("agentcat.sdk.language", "go")
-	add("agentcat.sdk.version", session.GetDependencyVersion(sdkModulePath))
-	add("agentcat.mcp_sdk.version", session.GetDependencyVersion(mcpSDKPath))
+	add("agentcat.sdk.version", core.GetDependencyVersion(sdkModulePath))
+	add("agentcat.mcp_sdk.version", core.GetDependencyVersion(mcpSDKPath))
 	add("agentcat.integration", integration)
 
 	add("process.runtime.name", "go")

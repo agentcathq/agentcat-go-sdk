@@ -12,8 +12,8 @@ import (
 	"time"
 
 	agentcatapi "go.agentcat.com/api"
-	"go.agentcat.com/sdk/internal/core"
-	"go.agentcat.com/sdk/internal/logging"
+	"go.agentcat.com/sdk/v2/internal/core"
+	"go.agentcat.com/sdk/v2/internal/logging"
 )
 
 func strPtr(s string) *string {

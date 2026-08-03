@@ -8,8 +8,8 @@ import (
 	"strings"
 	"testing"
 
-	"go.agentcat.com/sdk/internal/core"
-	"go.agentcat.com/sdk/internal/logging"
+	"go.agentcat.com/sdk/v2/internal/core"
+	"go.agentcat.com/sdk/v2/internal/logging"
 )
 
 func newDatadogExporterForTest(t *testing.T, env string) (*DatadogExporter, *[]byte, *[]byte) {
@@ -269,5 +269,22 @@ func TestDatadogExporter_PartialFailureReturnsError(t *testing.T) {
 
 	if err := e.Export(testEvent()); err == nil {
 		t.Fatal("expected error when logs endpoint fails")
+	}
+}
+
+// TestDatadogSessionlessOmitsSessionID pins that a sessionless event carries
+// no mcp.session_id in its log payload. setIfNotEmpty already does this; the
+// test keeps it true now that validation makes sessionless events routine.
+func TestDatadogSessionlessOmitsSessionID(t *testing.T) {
+	e, _, _ := newDatadogExporterForTest(t, "prod")
+	evt := testEvent()
+	evt.SetSessionIdNil()
+
+	log := e.eventToLog(evt)
+	if log.MCP == nil {
+		t.Fatal("log payload has no mcp object")
+	}
+	if v, ok := log.MCP["session_id"]; ok {
+		t.Errorf("sessionless log carries mcp.session_id = %v", v)
 	}
 }
