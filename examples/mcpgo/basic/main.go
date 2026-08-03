@@ -1,8 +1,9 @@
 // Example: Minimal AgentCat integration with mark3labs/mcp-go
 //
 // This shows the simplest possible AgentCat setup — just call Track() and defer
-// shutdown. All tool calls, resource reads, and protocol events are captured
-// automatically.
+// shutdown. Every tool call is captured automatically, and AgentCat correlates
+// the calls belonging to one session through the session_id parameter it adds to each
+// tool schema and mints back to the agent on its first call.
 //
 // Usage:
 //
@@ -19,7 +20,7 @@ import (
 	"github.com/mark3labs/mcp-go/mcp"
 	"github.com/mark3labs/mcp-go/server"
 
-	agentcat "go.agentcat.com/sdk/mcpgo"
+	agentcat "go.agentcat.com/sdk/mcpgo/v2"
 )
 
 func processData(input string) error {

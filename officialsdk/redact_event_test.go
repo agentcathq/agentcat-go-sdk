@@ -2,6 +2,7 @@ package officialsdk
 
 import (
 	"context"
+	"fmt"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -11,7 +12,7 @@ import (
 	"time"
 
 	"github.com/modelcontextprotocol/go-sdk/mcp"
-	agentcat "go.agentcat.com/sdk"
+	agentcat "go.agentcat.com/sdk/v2"
 )
 
 // captureAPI is a stand-in for the AgentCat API that records raw request
@@ -159,8 +160,9 @@ func TestRedactEvent_HookRewritesEventBeforePublish(t *testing.T) {
 }
 
 // TestRedactEvent_NilDropsEvent verifies that returning nil from the hook
-// drops the event entirely while other event types still publish and the
-// server continues to operate.
+// drops that event entirely while other events still publish and the server
+// continues to operate. (v2 publishes only tool-call events, so the drop is
+// keyed on the event's recorded arguments.)
 func TestRedactEvent_NilDropsEvent(t *testing.T) {
 	api := newCaptureAPI(t)
 
@@ -169,7 +171,7 @@ func TestRedactEvent_NilDropsEvent(t *testing.T) {
 		DisableToolCallContext: true,
 		APIBaseURL:             api.srv.URL,
 		RedactEvent: func(event *agentcat.Event) (*agentcat.Event, error) {
-			if event.GetEventType() == "mcp:tools/call" {
+			if strings.Contains(fmt.Sprint(event.Parameters), "Dropped") {
 				return nil, nil // drop
 			}
 			return event, nil
@@ -188,27 +190,32 @@ func TestRedactEvent_NilDropsEvent(t *testing.T) {
 		t.Fatal("expected tool call to succeed")
 	}
 
-	arrived := api.waitFor(3*time.Second, func(bodies []string) bool {
-		return len(bodies) > 0
-	})
-	if !arrived {
-		t.Fatal("no events at all reached the capture API")
-	}
-	time.Sleep(500 * time.Millisecond) // settle: give a dropped event time to (not) arrive
-
-	for _, b := range api.snapshot() {
-		if strings.Contains(b, "mcp:tools/call") {
-			t.Errorf("tool-call event reached the API despite nil return: %s", b)
-		}
-	}
-
-	// The server is still fully operational.
+	// A second call that the hook lets through proves the pipeline is alive.
 	result2, err := clientSession.CallTool(ctx, &mcp.CallToolParams{
 		Name:      "greet",
-		Arguments: map[string]any{"name": "Again"},
+		Arguments: map[string]any{"name": "Kept"},
 	})
 	if err != nil || result2.IsError {
 		t.Fatalf("second CallTool failed: err=%v", err)
+	}
+
+	arrived := api.waitFor(3*time.Second, func(bodies []string) bool {
+		for _, b := range bodies {
+			if strings.Contains(b, "Kept") {
+				return true
+			}
+		}
+		return false
+	})
+	if !arrived {
+		t.Fatal("the kept event never reached the capture API")
+	}
+	settleForAbsentPublishes()
+
+	for _, b := range api.snapshot() {
+		if strings.Contains(b, "Dropped") {
+			t.Errorf("dropped event reached the API despite nil return: %s", b)
+		}
 	}
 }
 

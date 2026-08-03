@@ -7,12 +7,12 @@ import (
 	"time"
 
 	agentcatapi "go.agentcat.com/api"
-	"go.agentcat.com/sdk/internal/core"
-	"go.agentcat.com/sdk/internal/exporters"
-	"go.agentcat.com/sdk/internal/logging"
-	"go.agentcat.com/sdk/internal/redaction"
-	"go.agentcat.com/sdk/internal/sanitization"
-	"go.agentcat.com/sdk/internal/truncation"
+	"go.agentcat.com/sdk/v2/internal/core"
+	"go.agentcat.com/sdk/v2/internal/exporters"
+	"go.agentcat.com/sdk/v2/internal/logging"
+	"go.agentcat.com/sdk/v2/internal/redaction"
+	"go.agentcat.com/sdk/v2/internal/sanitization"
+	"go.agentcat.com/sdk/v2/internal/truncation"
 )
 
 var (

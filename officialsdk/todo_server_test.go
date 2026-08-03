@@ -9,7 +9,7 @@ import (
 
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 
-	agentcat "go.agentcat.com/sdk"
+	agentcat "go.agentcat.com/sdk/v2"
 )
 
 // Todo represents a single todo item.
@@ -181,6 +181,54 @@ func createFullTestServer(t *testing.T) (*mcp.Server, *TodoStore) {
 		return nil, todoTextResult{Text: "todo deleted successfully"}, nil
 	})
 
+	// Tool: always_fails — returns an IsError result on every call (raw
+	// AddTool: no schema validation, no declared output schema).
+	server.AddTool(&mcp.Tool{
+		Name:        "always_fails",
+		Description: "Always returns a tool error",
+		InputSchema: map[string]any{"type": "object"},
+	}, func(ctx context.Context, req *mcp.CallToolRequest) (*mcp.CallToolResult, error) {
+		return &mcp.CallToolResult{
+			IsError: true,
+			Content: []mcp.Content{&mcp.TextContent{Text: "intentional failure"}},
+		}, nil
+	})
+
+	// Tool: echo_args — echoes the arguments the handler received as JSON
+	// text, so tests can observe exactly what survived stripping (raw
+	// AddTool: no schema validation, no declared output schema).
+	server.AddTool(&mcp.Tool{
+		Name:        "echo_args",
+		Description: "Echoes the received arguments",
+		InputSchema: map[string]any{
+			"type": "object",
+			"properties": map[string]any{
+				"payload": map[string]any{"type": "string"},
+			},
+		},
+	}, func(ctx context.Context, req *mcp.CallToolRequest) (*mcp.CallToolResult, error) {
+		echoed := "{}"
+		if len(req.Params.Arguments) > 0 {
+			echoed = string(req.Params.Arguments)
+		}
+		return &mcp.CallToolResult{
+			Content: []mcp.Content{&mcp.TextContent{Text: echoed}},
+		}, nil
+	})
+
+	// Tool: structured_only — returns structuredContent and NO content blocks.
+	// The go-sdk normalizes the nil Content to an empty slice before the
+	// middleware sees the result, so this is the shape that proves the
+	// mint-back reaches structured-only tools (raw AddTool: no schema
+	// validation, no declared output schema).
+	server.AddTool(&mcp.Tool{
+		Name:        "structured_only",
+		Description: "Returns structured content and no content blocks",
+		InputSchema: map[string]any{"type": "object"},
+	}, func(ctx context.Context, req *mcp.CallToolRequest) (*mcp.CallToolResult, error) {
+		return &mcp.CallToolResult{StructuredContent: map[string]any{"ok": true}}, nil
+	})
+
 	// Resource: todo://list
 	server.AddResource(&mcp.Resource{
 		URI:         "todo://list",
@@ -237,6 +285,13 @@ func createFullTestServer(t *testing.T) (*mcp.Server, *TodoStore) {
 // MCPCat tracking middleware with a mock publisher for test assertions.
 func createFullTestServerWithTracking(t *testing.T, opts *Options) (*mcp.Server, *TodoStore, *mockPublisher) {
 	t.Helper()
+	return createTodoServerWithProject(t, opts, "proj_test")
+}
+
+// createTodoServerWithProject is createFullTestServerWithTracking with an
+// explicit project ID (the hook-mode golden vector is pinned to proj_1).
+func createTodoServerWithProject(t *testing.T, opts *Options, projectID string) (*mcp.Server, *TodoStore, *mockPublisher) {
+	t.Helper()
 
 	server, store := createFullTestServer(t)
 
@@ -246,7 +301,6 @@ func createFullTestServerWithTracking(t *testing.T, opts *Options) (*mcp.Server,
 		opts = DefaultOptions()
 	}
 
-	projectID := "proj_test"
 	serverImpl := &mcp.Implementation{Name: "todo-test-server", Version: "1.0.0"}
 
 	coreOpts := &agentcat.Options{
@@ -254,6 +308,7 @@ func createFullTestServerWithTracking(t *testing.T, opts *Options) (*mcp.Server,
 		DisableToolCallContext:     opts.DisableToolCallContext,
 		DisableTracing:             opts.DisableTracing,
 		CustomContextDescription:   opts.CustomContextDescription,
+		EnableAgentTracking:        opts.EnableAgentTracking,
 		Debug:                      opts.Debug,
 		RedactSensitiveInformation: opts.RedactSensitiveInformation,
 	}
@@ -261,13 +316,10 @@ func createFullTestServerWithTracking(t *testing.T, opts *Options) (*mcp.Server,
 	instance := &agentcat.AgentCatInstance{
 		ProjectID: projectID,
 		Options:   coreOpts,
-		ServerRef: server,
-		SessionID: agentcat.NewSessionID(),
 	}
 	agentcat.RegisterServer(server, instance)
 
-	middleware, sessionMap := newTrackingMiddleware(projectID, opts, mock.publish, serverImpl)
-	defer sessionMap.Stop()
+	middleware := newTrackingMiddleware(server, projectID, opts, mock.publish, serverImpl)
 	server.AddReceivingMiddleware(middleware)
 
 	registerGetMoreToolsIfEnabled(server, coreOpts)

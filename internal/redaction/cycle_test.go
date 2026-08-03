@@ -4,7 +4,7 @@ import (
 	"testing"
 
 	agentcatapi "go.agentcat.com/api"
-	"go.agentcat.com/sdk/internal/core"
+	"go.agentcat.com/sdk/v2/internal/core"
 )
 
 // TestRedactEvent_CyclicParameters verifies that self-referential customer

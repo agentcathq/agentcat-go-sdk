@@ -6,7 +6,7 @@ import (
 	"strings"
 	"testing"
 
-	"go.agentcat.com/sdk/internal/logging"
+	"go.agentcat.com/sdk/v2/internal/logging"
 )
 
 // captureLogger swaps the singleton logger's writer to buf for the duration of the test.

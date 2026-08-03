@@ -6,7 +6,7 @@ import (
 	"time"
 
 	agentcatapi "go.agentcat.com/api"
-	"go.agentcat.com/sdk/internal/core"
+	"go.agentcat.com/sdk/v2/internal/core"
 )
 
 func baseEvent() *core.Event {

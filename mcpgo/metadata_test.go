@@ -11,81 +11,8 @@ import (
 
 	"github.com/mark3labs/mcp-go/client"
 	"github.com/mark3labs/mcp-go/mcp"
-	"github.com/mark3labs/mcp-go/server"
-	agentcat "go.agentcat.com/sdk"
+	agentcat "go.agentcat.com/sdk/v2"
 )
-
-// setupSpyHTTP wires up a full HTTP transport (like setupStreamableHTTP) but
-// with the tracing hooks publishing into a mockPublisher, so tests can assert
-// on the exact events that would be sent to MCPCat.
-func setupSpyHTTP(t *testing.T, opts *Options) (*client.Client, *mockPublisher) {
-	t.Helper()
-
-	mcpServer, _ := CreateFullServer()
-
-	hooks := &server.Hooks{}
-	server.WithHooks(hooks)(mcpServer)
-
-	mock := &mockPublisher{}
-	sessionMap := addTracingToHooks(hooks, opts, mock.publish)
-	t.Cleanup(sessionMap.Stop)
-
-	instance := &agentcat.AgentCatInstance{
-		ProjectID: "test_project",
-		Options: &agentcat.Options{
-			DisableReportMissing:     opts.DisableReportMissing,
-			DisableToolCallContext:   opts.DisableToolCallContext,
-			DisableTracing:           opts.DisableTracing,
-			CustomContextDescription: opts.CustomContextDescription,
-		},
-		ServerRef: mcpServer,
-		SessionID: agentcat.NewSessionID(),
-	}
-	agentcat.RegisterServer(mcpServer, instance)
-
-	httpServer := server.NewTestStreamableHTTPServer(mcpServer)
-
-	mcpClient, err := client.NewStreamableHttpClient(httpServer.URL)
-	if err != nil {
-		httpServer.Close()
-		unregisterServer(mcpServer)
-		t.Fatalf("setupSpyHTTP: NewStreamableHttpClient failed: %v", err)
-	}
-
-	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
-
-	if err := mcpClient.Start(ctx); err != nil {
-		cancel()
-		mcpClient.Close()
-		httpServer.Close()
-		unregisterServer(mcpServer)
-		t.Fatalf("setupSpyHTTP: client.Start failed: %v", err)
-	}
-
-	initReq := mcp.InitializeRequest{}
-	initReq.Params.ProtocolVersion = mcp.LATEST_PROTOCOL_VERSION
-	initReq.Params.ClientInfo = mcp.Implementation{
-		Name:    "spy-http-client",
-		Version: "1.0.0",
-	}
-
-	if _, err := mcpClient.Initialize(ctx, initReq); err != nil {
-		cancel()
-		mcpClient.Close()
-		httpServer.Close()
-		unregisterServer(mcpServer)
-		t.Fatalf("setupSpyHTTP: Initialize failed: %v", err)
-	}
-
-	t.Cleanup(func() {
-		mcpClient.Close()
-		httpServer.Close()
-		cancel()
-		unregisterServer(mcpServer)
-	})
-
-	return mcpClient, mock
-}
 
 func callAddTodo(t *testing.T, mcpClient *client.Client, title string) {
 	t.Helper()
@@ -150,6 +77,8 @@ func TestEventTags_AttachedToAutoCapturedEvents(t *testing.T) {
 	}
 }
 
+// TestEventTags_PanicIsSwallowed verifies the customer's tags are dropped when
+// their callback panics while the event — and the SDK's own tags — survive.
 func TestEventTags_PanicIsSwallowed(t *testing.T) {
 	opts := &Options{
 		DisableReportMissing:   true,
@@ -167,11 +96,11 @@ func TestEventTags_PanicIsSwallowed(t *testing.T) {
 	if evt == nil {
 		t.Fatal("event should still be published when EventTags panics")
 	}
-	if evt.Tags != nil {
-		t.Errorf("expected no tags after panic, got %v", *evt.Tags)
-	}
+	assertOnlySDKTags(t, evt)
 }
 
+// TestEventTags_NilResultOmitsTags verifies a nil customer result contributes
+// no tags; the SDK's own tags are still stamped.
 func TestEventTags_NilResultOmitsTags(t *testing.T) {
 	opts := &Options{
 		DisableReportMissing:   true,
@@ -189,8 +118,24 @@ func TestEventTags_NilResultOmitsTags(t *testing.T) {
 	if evt == nil {
 		t.Fatal("no tools/call event captured")
 	}
-	if evt.Tags != nil {
-		t.Errorf("expected nil tags, got %v", *evt.Tags)
+	assertOnlySDKTags(t, evt)
+}
+
+// assertOnlySDKTags fails unless the event carries the SDK's own tags and
+// nothing else.
+func assertOnlySDKTags(t *testing.T, evt *agentcat.Event) {
+	t.Helper()
+	if evt.Tags == nil {
+		t.Fatal("SDK tags are always stamped on tool-call events")
+	}
+	tags := *evt.Tags
+	if _, ok := tags["agentcat_session_id_source"]; !ok {
+		t.Errorf("SDK session source tag missing: %v", tags)
+	}
+	for key := range tags {
+		if !strings.HasPrefix(key, "agentcat_") {
+			t.Errorf("unexpected customer tag %q survived: %v", key, tags)
+		}
 	}
 }
 
@@ -261,8 +206,7 @@ func TestDisableTracing_NoEventsPublished(t *testing.T) {
 	mcpClient, mock := setupSpyHTTP(t, opts)
 	callAddTodo(t, mcpClient, "tracing disabled")
 
-	// Give any (incorrect) capture a moment to run.
-	time.Sleep(100 * time.Millisecond)
+	settleForAbsentEvents()
 
 	if events := mock.getEvents(); len(events) != 0 {
 		t.Errorf("expected 0 events with DisableTracing, got %d", len(events))
@@ -340,40 +284,50 @@ func TestCustomContextDescription_UsedInInjectedParam(t *testing.T) {
 	}
 }
 
-// --- G9: Deterministic session IDs ---
+// --- G9: session attribution is stateless ---
 
-func TestDeterministicSessionID_DerivedFromTransportSession(t *testing.T) {
+// TestSessionIDIgnoresTransportSession pins that the transport session ID plays
+// no part in session attribution: two calls on one HTTP session get two distinct
+// minted sessions, and neither is derived from the session ID.
+func TestSessionIDIgnoresTransportSession(t *testing.T) {
 	opts := &Options{
 		DisableReportMissing:   true,
 		DisableToolCallContext: true,
 	}
 
 	mcpClient, mock := setupSpyHTTP(t, opts)
-	callAddTodo(t, mcpClient, "session derivation")
+	callAddTodo(t, mcpClient, "first")
+	callAddTodo(t, mcpClient, "second")
+
+	events := filterEvents(mock.waitForEvents(2, 2*time.Second), "mcp:tools/call")
+	if len(events) != 2 {
+		t.Fatalf("expected 2 tool-call events, got %d", len(events))
+	}
+	if events[0].GetSessionId() == events[1].GetSessionId() {
+		t.Error("each minted call gets its own session; nothing is keyed off the transport session")
+	}
 
 	rawSessionID := mcpClient.GetSessionId()
 	if rawSessionID == "" {
-		t.Skip("transport did not expose a session ID")
+		return
 	}
-
-	events := mock.waitForEvents(1, 2*time.Second)
-	evt := findEventByType(events, "mcp:tools/call")
-	if evt == nil {
-		t.Fatal("no tools/call event captured")
-	}
-
-	want := agentcat.DeriveSessionID(rawSessionID, "test_project")
-	if got := evt.GetSessionId(); got != want {
-		t.Errorf("event session ID = %q, want deterministic %q (raw %q)", got, want, rawSessionID)
-	}
-	if !strings.HasPrefix(evt.GetSessionId(), "ses_") {
-		t.Errorf("session ID missing ses_ prefix: %q", evt.GetSessionId())
+	derived := agentcat.DeriveSessionID(rawSessionID, "test_project")
+	for i, evt := range events {
+		if evt.GetSessionId() == derived {
+			t.Errorf("event %d session is derived from the transport session ID (%q)", i, rawSessionID)
+		}
+		if !strings.HasPrefix(evt.GetSessionId(), "ses_") {
+			t.Errorf("session ID missing ses_ prefix: %q", evt.GetSessionId())
+		}
 	}
 }
 
-// --- G11: Identify re-run + publish-every-time ---
+// --- G11: Identify re-runs per tool call and stamps that event ---
 
-func TestIdentify_PublishesEveryTime(t *testing.T) {
+// TestIdentify_StampsEachToolCallEvent verifies Identify runs on every tool
+// call with no dedup, and that each result stamps its own event (v2 publishes
+// no separate identify event).
+func TestIdentify_StampsEachToolCallEvent(t *testing.T) {
 	identities := []*agentcat.UserIdentity{
 		{UserID: "u1", UserName: "Alice", UserData: map[string]any{"plan": "free"}},
 		{UserID: "u1", UserName: "Alice", UserData: map[string]any{"plan": "free"}}, // identical to first
@@ -387,11 +341,6 @@ func TestIdentify_PublishesEveryTime(t *testing.T) {
 		DisableReportMissing:   true,
 		DisableToolCallContext: true,
 		Identify: func(ctx context.Context, request any) *agentcat.UserIdentity {
-			// Gate to tool calls so the identify-event count is driven only
-			// by the three callAddTodo calls below.
-			if _, ok := request.(*mcp.CallToolRequest); !ok {
-				return nil
-			}
 			return identities[int(call.Add(1)-1)%len(identities)]
 		},
 	}
@@ -402,49 +351,40 @@ func TestIdentify_PublishesEveryTime(t *testing.T) {
 	callAddTodo(t, mcpClient, "second")
 	callAddTodo(t, mcpClient, "third")
 
-	events := mock.waitForEvents(7, 3*time.Second)
+	events := filterEvents(mock.waitForEvents(3, 3*time.Second), "mcp:tools/call")
+	if len(events) != 3 {
+		t.Fatalf("expected 3 tool-call events, got %d", len(events))
+	}
 
-	var identifyEvents []*agentcat.Event
-	for _, evt := range events {
-		if evt.EventType != nil && *evt.EventType == "agentcat:identify" {
-			identifyEvents = append(identifyEvents, evt)
+	// Every event is stamped — unchanged identities included (no dedup).
+	for i, evt := range events {
+		if evt.IdentifyActorGivenId == nil || *evt.IdentifyActorGivenId != "u1" {
+			t.Errorf("event %d actor = %v, want u1", i, evt.IdentifyActorGivenId)
 		}
 	}
-
-	if len(identifyEvents) != 3 {
-		t.Fatalf("expected 3 identify events (one per identify call, no dedup), got %d", len(identifyEvents))
+	for i, want := range []string{"free", "free", "pro"} {
+		if got := events[i].IdentifyData["plan"]; got != want {
+			t.Errorf("event %d plan = %v, want %s", i, got, want)
+		}
 	}
-
-	// The first two identify events carry the identical identity — proving
-	// unchanged identities are still published (no change-detection dedup).
-	if identifyEvents[0].IdentifyData["plan"] != "free" {
-		t.Errorf("first identify event plan = %v, want free", identifyEvents[0].IdentifyData["plan"])
-	}
-	if identifyEvents[1].IdentifyData["plan"] != "free" {
-		t.Errorf("second identify event plan = %v, want free", identifyEvents[1].IdentifyData["plan"])
-	}
-	if identifyEvents[2].IdentifyData["plan"] != "pro" {
-		t.Errorf("third identify event plan = %v, want pro", identifyEvents[2].IdentifyData["plan"])
+	if len(filterEvents(mock.getEvents(), "agentcat:identify")) != 0 {
+		t.Error("v2 publishes no separate identify event")
 	}
 }
 
-func TestIdentify_MergesUserData(t *testing.T) {
+// TestIdentify_DoesNotMergeAcrossCalls is the inverse of the v1 session-merge
+// behavior: identity is per call, verbatim, with nothing carried over.
+func TestIdentify_DoesNotMergeAcrossCalls(t *testing.T) {
 	identities := []*agentcat.UserIdentity{
 		{UserID: "u1", UserData: map[string]any{"region": "us", "plan": "free"}},
 		{UserID: "u2", UserData: map[string]any{"plan": "pro"}},
 	}
-	// The callback runs on server request-handling goroutines, so the call
-	// counter must be synchronized with the test goroutine.
 	var call atomic.Int64
 
 	opts := &Options{
 		DisableReportMissing:   true,
 		DisableToolCallContext: true,
 		Identify: func(ctx context.Context, request any) *agentcat.UserIdentity {
-			// Gate to tool calls so exactly two identify events are published.
-			if _, ok := request.(*mcp.CallToolRequest); !ok {
-				return nil
-			}
 			return identities[int(call.Add(1)-1)%len(identities)]
 		},
 	}
@@ -454,27 +394,20 @@ func TestIdentify_MergesUserData(t *testing.T) {
 	callAddTodo(t, mcpClient, "first")
 	callAddTodo(t, mcpClient, "second")
 
-	events := mock.waitForEvents(5, 3*time.Second)
-
-	var identifyEvents []*agentcat.Event
-	for _, evt := range events {
-		if evt.EventType != nil && *evt.EventType == "agentcat:identify" {
-			identifyEvents = append(identifyEvents, evt)
-		}
-	}
-	if len(identifyEvents) != 2 {
-		t.Fatalf("expected 2 identify events, got %d", len(identifyEvents))
+	events := filterEvents(mock.waitForEvents(2, 3*time.Second), "mcp:tools/call")
+	if len(events) != 2 {
+		t.Fatalf("expected 2 tool-call events, got %d", len(events))
 	}
 
-	merged := identifyEvents[1]
-	if merged.IdentifyActorGivenId == nil || *merged.IdentifyActorGivenId != "u2" {
-		t.Errorf("UserID should be overwritten to u2, got %v", merged.IdentifyActorGivenId)
+	second := events[1]
+	if second.IdentifyActorGivenId == nil || *second.IdentifyActorGivenId != "u2" {
+		t.Errorf("second event actor = %v, want u2", second.IdentifyActorGivenId)
 	}
-	if merged.IdentifyData["plan"] != "pro" {
-		t.Errorf("plan should be overwritten to pro, got %v", merged.IdentifyData["plan"])
+	if second.IdentifyData["plan"] != "pro" {
+		t.Errorf("plan = %v, want pro", second.IdentifyData["plan"])
 	}
-	if merged.IdentifyData["region"] != "us" {
-		t.Errorf("region should be preserved from previous identity, got %v", merged.IdentifyData["region"])
+	if _, has := second.IdentifyData["region"]; has {
+		t.Errorf("nothing carries over between calls, got %v", second.IdentifyData)
 	}
 }
 
@@ -491,18 +424,18 @@ func TestIdentify_PanicIsSwallowed(t *testing.T) {
 	callAddTodo(t, mcpClient, "identify panic")
 
 	events := mock.waitForEvents(1, 2*time.Second)
-	if evt := findEventByType(events, "mcp:tools/call"); evt == nil {
+	evt := findEventByType(events, "mcp:tools/call")
+	if evt == nil {
 		t.Fatal("tool call event should still be published when Identify panics")
 	}
-	if evt := findEventByType(events, "agentcat:identify"); evt != nil {
-		t.Error("no identify event should be published when Identify panics")
+	if evt.IdentifyActorGivenId != nil {
+		t.Errorf("no actor should be stamped when Identify panics, got %q", *evt.IdentifyActorGivenId)
 	}
 }
 
-// TestIdentify_RunsOnEveryMethod verifies the Identify hook runs for every
-// auto-captured MCP method (not just tools/call) and that an identify event
-// is published for each captured event when the callback returns an identity.
-func TestIdentify_RunsOnEveryMethod(t *testing.T) {
+// TestIdentify_RunsOnlyOnToolCalls verifies the v2 contract: Identify runs once
+// per tool call and never for other MCP methods (which publish no events).
+func TestIdentify_RunsOnlyOnToolCalls(t *testing.T) {
 	var mu sync.Mutex
 	seenTypes := make(map[string]bool)
 
@@ -513,7 +446,7 @@ func TestIdentify_RunsOnEveryMethod(t *testing.T) {
 			mu.Lock()
 			seenTypes[fmt.Sprintf("%T", request)] = true
 			mu.Unlock()
-			return &agentcat.UserIdentity{UserID: "u-every", UserName: "Every Method"}
+			return &agentcat.UserIdentity{UserID: "u-every", UserName: "Every Call"}
 		},
 	}
 
@@ -525,35 +458,25 @@ func TestIdentify_RunsOnEveryMethod(t *testing.T) {
 	if _, err := mcpClient.ListTools(ctx, mcp.ListToolsRequest{}); err != nil {
 		t.Fatalf("ListTools failed: %v", err)
 	}
-	callAddTodo(t, mcpClient, "every method")
+	callAddTodo(t, mcpClient, "only tool calls")
 
-	// initialize + tools/list + tools/call, each paired with an identify event.
-	events := mock.waitForEvents(6, 3*time.Second)
+	events := mock.waitForEvents(1, 3*time.Second)
 
 	mu.Lock()
-	for _, want := range []string{"*mcp.InitializeRequest", "*mcp.ListToolsRequest", "*mcp.CallToolRequest"} {
-		if !seenTypes[want] {
-			t.Errorf("Identify was not invoked with request type %s (saw %v)", want, seenTypes)
+	if !seenTypes["*mcp.CallToolRequest"] {
+		t.Errorf("Identify must run for tool calls (saw %v)", seenTypes)
+	}
+	for seen := range seenTypes {
+		if seen != "*mcp.CallToolRequest" {
+			t.Errorf("Identify must not run for %s", seen)
 		}
 	}
 	mu.Unlock()
 
-	var identifyCount, mcpCount int
-	for _, evt := range events {
-		if evt.EventType == nil {
-			continue
-		}
-		switch {
-		case *evt.EventType == "agentcat:identify":
-			identifyCount++
-		case strings.HasPrefix(*evt.EventType, "mcp:"):
-			mcpCount++
-		}
+	if got := len(filterEvents(events, "mcp:tools/call")); got != 1 {
+		t.Errorf("expected exactly 1 tool-call event, got %d of %v", got, eventTypes(events))
 	}
-	if mcpCount == 0 {
-		t.Fatal("expected captured mcp:* events")
-	}
-	if identifyCount != mcpCount {
-		t.Errorf("expected one identify event per captured mcp event: identify=%d, mcp=%d", identifyCount, mcpCount)
+	if len(events) != 1 {
+		t.Errorf("expected only the tool-call event, got %v", eventTypes(events))
 	}
 }

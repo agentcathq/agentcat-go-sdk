@@ -8,7 +8,7 @@ import (
 	"testing"
 	"time"
 
-	"go.agentcat.com/sdk/internal/core"
+	"go.agentcat.com/sdk/v2/internal/core"
 )
 
 // newTelemetryTestServer returns an httptest server counting OTLP hits.

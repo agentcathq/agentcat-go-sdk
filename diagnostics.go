@@ -1,8 +1,8 @@
 package agentcat
 
 import (
-	"go.agentcat.com/sdk/internal/diagnostics"
-	"go.agentcat.com/sdk/internal/logging"
+	"go.agentcat.com/sdk/v2/internal/diagnostics"
+	"go.agentcat.com/sdk/v2/internal/logging"
 )
 
 // InitDiagnostics initializes internal SDK diagnostics and emits the setup-start
@@ -24,6 +24,21 @@ func LogSetupComplete(projectID string, opts *Options) {
 // LogSetupFailed logs a setup failure as ERROR so it surfaces in diagnostics.
 func LogSetupFailed(reason string) {
 	logging.New().Errorf("AgentCat setup failed | %s", reason)
+}
+
+// LogWarn writes a warning to ~/agentcat.log. Integration API for the adapter
+// modules, which cannot reach internal/logging across the module boundary.
+// Use it for degraded-but-safe outcomes the customer may want to know about
+// (a schema AgentCat could not read, a dropped event); anything that breaks
+// capture outright belongs in LogRecoveredPanic or LogSetupFailed.
+func LogWarn(format string, args ...any) {
+	logging.New().Warnf(format, args...)
+}
+
+// logError writes an error to ~/agentcat.log and tees it to the anonymized
+// diagnostics sink, like every other Errorf in this SDK.
+func logError(format string, args ...any) {
+	logging.New().Errorf(format, args...)
 }
 
 // ResetDiagnosticsForTest resets internal diagnostics + logging sink state. For tests.

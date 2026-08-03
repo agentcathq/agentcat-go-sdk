@@ -1,4 +1,4 @@
-module go.agentcat.com/sdk
+module go.agentcat.com/sdk/v2
 
 go 1.24.0
 

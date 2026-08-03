@@ -10,7 +10,7 @@ import (
 	"testing"
 
 	"github.com/modelcontextprotocol/go-sdk/mcp"
-	"go.agentcat.com/sdk"
+	"go.agentcat.com/sdk/v2"
 )
 
 func TestMain(m *testing.M) {

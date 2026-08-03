@@ -32,6 +32,8 @@ examples/officialsdk/basic/basic
 examples/officialsdk/basic/officialsdk-basic
 examples/officialsdk/advanced/advanced
 examples/officialsdk/advanced/officialsdk-advanced
+examples/officialsdk/factory/factory
+examples/officialsdk/factory/officialsdk-factory
 
 # Dependency directories
 # vendor/
@@ -81,3 +83,8 @@ Desktop.ini
 *.temp
 tmp/
 temp/
+
+# Planning and design working notes: local scratch, never committed.
+# docs/ itself stays tracked (cats, static assets).
+docs/superpowers/plans/
+docs/superpowers/specs/

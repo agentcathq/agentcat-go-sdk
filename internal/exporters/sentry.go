@@ -8,8 +8,8 @@ import (
 	"strings"
 	"time"
 
-	"go.agentcat.com/sdk/internal/core"
-	"go.agentcat.com/sdk/internal/logging"
+	"go.agentcat.com/sdk/v2/internal/core"
+	"go.agentcat.com/sdk/v2/internal/logging"
 )
 
 // SentryExporter sends events to Sentry via the envelope API. Every event is

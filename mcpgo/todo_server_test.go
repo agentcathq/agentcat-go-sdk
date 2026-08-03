@@ -2,8 +2,10 @@ package mcpgo
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"sync"
+	"time"
 
 	"github.com/mark3labs/mcp-go/mcp"
 	"github.com/mark3labs/mcp-go/server"
@@ -99,12 +101,14 @@ func (s *TodoStore) Delete(id string) error {
 	return nil
 }
 
-// CreateTodoServerSimple creates an MCP server with todo app tools without hooks
-func CreateTodoServerSimple() (*server.MCPServer, *TodoStore) {
+// CreateTodoServerSimple creates an MCP server with todo app tools. Extra
+// server options (e.g. server.WithHooks for customer hooks) are applied after
+// the defaults, mirroring how a customer builds their own server.
+func CreateTodoServerSimple(opts ...server.ServerOption) (*server.MCPServer, *TodoStore) {
 	mcpServer := server.NewMCPServer(
 		"todo-server",
 		"1.0.0",
-		server.WithToolCapabilities(true),
+		append([]server.ServerOption{server.WithToolCapabilities(true)}, opts...)...,
 	)
 
 	store := NewTodoStore()
@@ -174,6 +178,146 @@ func CreateFullServer() (*server.MCPServer, *TodoStore) {
 	})
 
 	return mcpServer, store
+}
+
+// orderedToolRawSchema is a customer-authored raw input schema whose property
+// order is deliberately non-alphabetical. Registered via RawInputSchema so the
+// bytes on the wire are the customer's own: injected params must be appended
+// after them, and their relative order must survive untouched.
+const orderedToolRawSchema = `{"type":"object","properties":{"zebra":{"type":"string","description":"Last alphabetically, first on the wire"},"apple":{"type":"string","description":"First alphabetically, second on the wire"}},"required":["zebra"]}`
+
+// registerOrderedTool adds the ordered_tool fixture to an existing server.
+func registerOrderedTool(mcpServer *server.MCPServer) {
+	tool := mcp.NewToolWithRawSchema(
+		"ordered_tool",
+		"A tool whose raw input schema pins its property order",
+		json.RawMessage(orderedToolRawSchema),
+	)
+
+	mcpServer.AddTool(tool, func(ctx context.Context, request mcp.CallToolRequest) (*mcp.CallToolResult, error) {
+		return mcp.NewToolResultText("ordered"), nil
+	})
+}
+
+// structuredOnlyOutput is the declared output shape of the structured_only
+// fixture tool. A declared output schema is what gates the handle mirror.
+type structuredOnlyOutput struct {
+	Text string `json:"text"`
+}
+
+// registerHandleFixtures adds the tools the v2 call-path tests need:
+//   - always_fails: an IsError result (mint-back must still be appended)
+//   - echo_args: echoes the arguments the handler actually received, and
+//     declares no output schema (so the mirror must stay off)
+//   - structured_only: structuredContent and NO content blocks, with a
+//     declared output schema (mint-back + mirror)
+func registerHandleFixtures(mcpServer *server.MCPServer) {
+	mcpServer.AddTool(
+		mcp.NewTool("always_fails", mcp.WithDescription("Always returns an error result")),
+		func(ctx context.Context, request mcp.CallToolRequest) (*mcp.CallToolResult, error) {
+			return mcp.NewToolResultError("intentional failure"), nil
+		},
+	)
+
+	mcpServer.AddTool(
+		mcp.NewTool("echo_args",
+			mcp.WithDescription("Echoes the arguments the handler received"),
+			mcp.WithString("payload", mcp.Description("Anything at all")),
+		),
+		func(ctx context.Context, request mcp.CallToolRequest) (*mcp.CallToolResult, error) {
+			args := request.GetArguments()
+			if args == nil {
+				args = map[string]any{}
+			}
+			encoded, err := json.Marshal(args)
+			if err != nil {
+				return mcp.NewToolResultError(err.Error()), nil
+			}
+			return mcp.NewToolResultText(string(encoded)), nil
+		},
+	)
+
+	mcpServer.AddTool(
+		mcp.NewTool("pointer_error", mcp.WithDescription("Returns an error result with pointer content")),
+		func(ctx context.Context, request mcp.CallToolRequest) (*mcp.CallToolResult, error) {
+			// Both mcp.TextContent and *mcp.TextContent satisfy mcp.Content.
+			return &mcp.CallToolResult{
+				IsError: true,
+				Content: []mcp.Content{&mcp.TextContent{Type: "text", Text: "pointer failure"}},
+			}, nil
+		},
+	)
+
+	mcpServer.AddTool(
+		mcp.NewTool("slow_tool", mcp.WithDescription("Takes a measurable amount of time to run")),
+		func(ctx context.Context, request mcp.CallToolRequest) (*mcp.CallToolResult, error) {
+			time.Sleep(25 * time.Millisecond)
+			return mcp.NewToolResultText("slow"), nil
+		},
+	)
+
+	mcpServer.AddTool(
+		mcp.NewTool("multi_error", mcp.WithDescription("Returns an error result built from several text blocks")),
+		func(ctx context.Context, request mcp.CallToolRequest) (*mcp.CallToolResult, error) {
+			return &mcp.CallToolResult{
+				IsError: true,
+				Content: []mcp.Content{
+					mcp.NewTextContent("Error:"),
+					mcp.NewTextContent("Invalid parameter."),
+					mcp.NewTextContent("Expected string."),
+				},
+			}, nil
+		},
+	)
+
+	mcpServer.AddTool(
+		mcp.NewToolWithRawSchema("echo_raw",
+			"Echoes the raw argument bytes the handler received",
+			json.RawMessage(`{"type":"object"}`),
+		),
+		func(ctx context.Context, request mcp.CallToolRequest) (*mcp.CallToolResult, error) {
+			return mcp.NewToolResultText(string(echoRawArgs(request))), nil
+		},
+	)
+
+	mcpServer.AddTool(
+		mcp.NewTool("big_numbers",
+			mcp.WithDescription("Returns structuredContent with integers beyond float64 precision"),
+			mcp.WithRawOutputSchema(json.RawMessage(`{"type":"object"}`)),
+		),
+		func(ctx context.Context, request mcp.CallToolRequest) (*mcp.CallToolResult, error) {
+			return &mcp.CallToolResult{
+				Content: []mcp.Content{mcp.NewTextContent("big")},
+				StructuredContent: json.RawMessage(
+					`{"exact":9007199254740993,"id":1234567890123456789,"nested":{"huge":12345678901234567890},"ratio":1.5}`,
+				),
+			}, nil
+		},
+	)
+
+	mcpServer.AddTool(
+		mcp.NewTool("structured_no_schema",
+			mcp.WithDescription("Returns structuredContent without declaring an output schema"),
+		),
+		func(ctx context.Context, request mcp.CallToolRequest) (*mcp.CallToolResult, error) {
+			return &mcp.CallToolResult{
+				Content:           []mcp.Content{mcp.NewTextContent("plain")},
+				StructuredContent: map[string]any{"text": "plain"},
+			}, nil
+		},
+	)
+
+	mcpServer.AddTool(
+		mcp.NewTool("structured_only",
+			mcp.WithDescription("Returns structuredContent and no content blocks"),
+			mcp.WithOutputSchema[structuredOnlyOutput](),
+		),
+		func(ctx context.Context, request mcp.CallToolRequest) (*mcp.CallToolResult, error) {
+			return &mcp.CallToolResult{
+				StructuredContent: map[string]any{"text": "structured"},
+			}, nil
+		},
+	)
 }
 
 func registerTodoTools(mcpServer *server.MCPServer, store *TodoStore) {

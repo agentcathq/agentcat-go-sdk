@@ -6,14 +6,13 @@ import (
 	"time"
 
 	agentcatapi "go.agentcat.com/api"
-	"go.agentcat.com/sdk/internal/core"
-	"go.agentcat.com/sdk/internal/event"
-	"go.agentcat.com/sdk/internal/exceptions"
-	"go.agentcat.com/sdk/internal/logging"
-	"go.agentcat.com/sdk/internal/publisher"
-	"go.agentcat.com/sdk/internal/registry"
-	"go.agentcat.com/sdk/internal/session"
-	"go.agentcat.com/sdk/internal/validation"
+	"go.agentcat.com/sdk/v2/internal/core"
+	"go.agentcat.com/sdk/v2/internal/event"
+	"go.agentcat.com/sdk/v2/internal/exceptions"
+	"go.agentcat.com/sdk/v2/internal/logging"
+	"go.agentcat.com/sdk/v2/internal/publisher"
+	"go.agentcat.com/sdk/v2/internal/registry"
+	"go.agentcat.com/sdk/v2/internal/validation"
 )
 
 // CustomEventType is the wire event type for customer-published custom events.
@@ -28,10 +27,12 @@ var (
 // PublishCustomEvent publishes a customer-defined event to AgentCat.
 //
 // serverOrSessionID is either a tracked MCP server instance (any server
-// previously passed to an adapter's Track function) or an MCP session ID
-// string. For a tracked server, the event uses the server's session; for a
-// session ID string, a deterministic session ID is derived from it so events
-// correlate with automatically captured events for that transport session.
+// previously passed to an adapter's Track function) or a session ID string.
+// A string is used verbatim as the event's session ID — no derivation or
+// validation is applied — so events correlate with whatever session or
+// correlation ID the caller already holds. For a tracked server, the event
+// publishes without a session unless one is provided via data.SessionID.
+// A non-empty data.SessionID always takes precedence over a string target.
 //
 // projectID is required. data is optional event payload.
 func PublishCustomEvent(serverOrSessionID any, projectID string, data *CustomEventData) error {
@@ -46,8 +47,8 @@ func PublishCustomEvent(serverOrSessionID any, projectID string, data *CustomEve
 
 	switch target := serverOrSessionID.(type) {
 	case string:
-		// Custom session ID provided: derive a deterministic session ID.
-		sessionID = session.DeriveSessionIDFromMCPSession(target, projectID)
+		// v2: the string is the session ID, used VERBATIM — no derivation.
+		sessionID = target
 	case nil:
 		return ErrInvalidTarget
 	default:
@@ -62,11 +63,16 @@ func PublishCustomEvent(serverOrSessionID any, projectID string, data *CustomEve
 			// Tracing disabled: accept and drop, matching auto-capture behavior.
 			return nil
 		}
-		sessionID = instance.SessionID
+		// v2: tracked-server custom events publish without a session unless
+		// one is explicitly provided via CustomEventData.SessionID.
+		sessionID = ""
 	}
 
 	if data == nil {
 		data = &CustomEventData{}
+	}
+	if data.SessionID != "" {
+		sessionID = data.SessionID // explicit SessionID always wins
 	}
 
 	eventID := event.NewEventID()
@@ -81,7 +87,13 @@ func PublishCustomEvent(serverOrSessionID any, projectID string, data *CustomEve
 			Duration:  data.Duration,
 		},
 	}
-	evt.SetSessionId(sessionID)
+	// Explicit null rather than an omitted key, so a sessionless custom event
+	// and a sessionless tool-call event look identical on the wire.
+	if sessionID != "" {
+		evt.SetSessionId(sessionID)
+	} else {
+		evt.SetSessionIdNil()
+	}
 
 	if data.ResourceName != "" {
 		evt.ResourceName = &data.ResourceName
@@ -107,7 +119,7 @@ func PublishCustomEvent(serverOrSessionID any, projectID string, data *CustomEve
 	}
 
 	evt.SdkLanguage = core.Ptr("Go")
-	evt.AgentcatVersion = core.Ptr(session.GetDependencyVersion("go.agentcat.com/sdk"))
+	evt.AgentcatVersion = core.Ptr(core.GetDependencyVersion("go.agentcat.com/sdk/v2"))
 
 	// Publish through the global publisher, initializing it if needed.
 	// For tracked servers, reuse the server's redaction, API base URL, and
@@ -128,7 +140,7 @@ func PublishCustomEvent(serverOrSessionID any, projectID string, data *CustomEve
 	pub := publisher.GetOrInit(redactFn, redactEventFn, apiBaseURL, exporterConfigs)
 	pub.Publish(evt)
 
-	logging.New().Debugf("Published custom event for session %s with type %q", sessionID, CustomEventType)
+	logging.New().Debugf("Published custom event (session %q) with type %q", sessionID, CustomEventType)
 
 	return nil
 }

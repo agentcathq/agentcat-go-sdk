@@ -18,7 +18,7 @@ import (
 	"reflect"
 	"sort"
 
-	"go.agentcat.com/sdk/internal/core"
+	"go.agentcat.com/sdk/v2/internal/core"
 )
 
 const (

@@ -1,10 +1,13 @@
 package core
 
 import (
-	"fmt"
-	"strings"
+	"context"
+	"sync"
+	"sync/atomic"
 
 	agentcatapi "go.agentcat.com/api"
+	"go.agentcat.com/sdk/v2/internal/constants"
+	"go.agentcat.com/sdk/v2/internal/inject"
 )
 
 // UserIdentity represents a user identity returned by the identify function
@@ -95,9 +98,23 @@ type Options struct {
 	// added to capture user intent.
 	DisableToolCallContext bool
 
+	// EnableAgentTracking, when true, injects an "agent_id" string parameter
+	// into tool input schemas so parallel agents working the same session can be
+	// distinguished. The value is self-chosen by the agent; an omitted
+	// agent_id NEVER rejects the call. Off by default.
+	//
+	// Injection is best-effort per tool, exactly like session_id and context: a
+	// tool that already declares its own agent_id keeps it, and a tool whose
+	// input schema is composed (oneOf/allOf/anyOf), unreadable, or absent is
+	// left alone. Where it IS injected it is marked required in the
+	// advertised schema.
+	EnableAgentTracking bool
+
 	// DisableTracing, when true, prevents any events from being published to
-	// the AgentCat API. Context parameter injection and the get_more_tools tool
-	// still honor their own flags.
+	// the AgentCat API and suppresses handle injection (BuildInjectConfig maps
+	// it to InjectHandles): no session_id or agent_id parameter is added to any
+	// tool and no mint-back is written to the wire. The "context" parameter and
+	// the get_more_tools tool still honor their own flags.
 	DisableTracing bool
 
 	// CustomContextDescription overrides the default description of the
@@ -148,134 +165,95 @@ type Event struct {
 // IDPrefix represents prefixes for AgentCat-generated IDs.
 type IDPrefix string
 
+// The prefix strings live in internal/constants, the single source shared
+// with the pure engine and pinned byte-for-byte against the other SDKs.
 const (
-	// PrefixSession is the prefix for session IDs.
-	PrefixSession IDPrefix = "ses"
+	// PrefixSession is the prefix for session IDs. It predates the rename
+	// away from task_id and is unchanged by it, so dashboards, saved queries
+	// and exporters that key on ses_ are unaffected.
+	PrefixSession IDPrefix = constants.PrefixSession
 
 	// PrefixEvent is the prefix for event IDs.
-	PrefixEvent IDPrefix = "evt"
+	PrefixEvent IDPrefix = constants.PrefixEvent
+
+	// PrefixAgent is reserved and never minted; see internal/constants.
+	PrefixAgent IDPrefix = constants.PrefixAgent
 )
 
-// Session represents session-level metadata that can be attached to events.
-type Session struct {
-	// Session ID uniquely identifies this session
-	SessionID *string `json:"session_id,omitempty"`
-
-	// Project ID for AgentCat tracking
-	ProjectID *string `json:"project_id,omitempty"`
-
-	// IP address of the client
-	IpAddress *string `json:"ip_address,omitempty"`
-
-	// Programming language of the SDK used
-	SdkLanguage *string `json:"sdk_language,omitempty"`
-
-	// Version of AgentCat being used
-	AgentcatVersion *string `json:"agentcat_version,omitempty"`
-
-	// Name of the MCP server
-	ServerName *string `json:"server_name,omitempty"`
-
-	// Version of the MCP server
-	ServerVersion *string `json:"server_version,omitempty"`
-
-	// Name of the MCP client
-	ClientName *string `json:"client_name,omitempty"`
-
-	// Version of the MCP client
-	ClientVersion *string `json:"client_version,omitempty"`
-
-	// Actor ID for agentcat:identify events
-	IdentifyActorGivenId *string `json:"identify_actor_given_id,omitempty"`
-
-	// Actor name for agentcat:identify events
-	IdentifyActorName *string `json:"identify_actor_name,omitempty"`
-
-	// Additional data for agentcat:identify events
-	IdentifyData map[string]any `json:"identify_data,omitempty"`
-}
-
-// String returns a formatted string representation of the Session
-func (s *Session) String() string {
-	if s == nil {
-		return "Session: <nil>"
-	}
-
-	// Helper to safely dereference string pointers
-	deref := func(p *string) string {
-		if p != nil {
-			return *p
-		}
-		return "<not set>"
-	}
-
-	var b strings.Builder
-	b.WriteString("Session {\n")
-	if s.ProjectID != nil {
-		b.WriteString("  Project: " + *s.ProjectID + "\n")
-	}
-	b.WriteString("  Client: " + deref(s.ClientName))
-	if s.ClientVersion != nil {
-		b.WriteString(" v" + *s.ClientVersion)
-	}
-	b.WriteString("\n")
-
-	b.WriteString("  Server: " + deref(s.ServerName))
-	if s.ServerVersion != nil {
-		b.WriteString(" v" + *s.ServerVersion)
-	}
-	b.WriteString("\n")
-
-	b.WriteString("  SDK: " + deref(s.SdkLanguage))
-	if s.AgentcatVersion != nil {
-		b.WriteString(" (AgentCat v" + *s.AgentcatVersion + ")")
-	}
-	b.WriteString("\n")
-
-	if s.IpAddress != nil {
-		b.WriteString("  IP: " + *s.IpAddress + "\n")
-	}
-
-	if s.IdentifyActorGivenId != nil || s.IdentifyActorName != nil {
-		b.WriteString("  Identity: ")
-		if s.IdentifyActorGivenId != nil {
-			b.WriteString("ID=" + *s.IdentifyActorGivenId)
-		}
-		if s.IdentifyActorName != nil {
-			if s.IdentifyActorGivenId != nil {
-				b.WriteString(", ")
-			}
-			b.WriteString("Name=" + *s.IdentifyActorName)
-		}
-		b.WriteString("\n")
-	}
-
-	if len(s.IdentifyData) > 0 {
-		b.WriteString("  Additional Data: ")
-		first := true
-		for k, v := range s.IdentifyData {
-			if !first {
-				b.WriteString(", ")
-			}
-			fmt.Fprintf(&b, "%s=%v", k, v)
-			first = false
-		}
-		b.WriteString("\n")
-	}
-
-	b.WriteString("}")
-	return b.String()
-}
-
 // AgentCatInstance represents the tracking configuration stored in the registry.
+//
+// Nothing here may hold a STRONG reference back to the server it describes.
+// The registry keys entries by pointer address and releases them through
+// runtime.AddCleanup, so any strong path from this value to the server would
+// keep the server reachable from a package-level map forever and the cleanup
+// would never fire — leaking one entry per Track() in the per-request factory
+// topology. (This is why the v1 ServerRef field was removed in v2, and why
+// RebuildTools closes over the server weakly.)
 type AgentCatInstance struct {
 	ProjectID string
 	Options   *Options
-	ServerRef any
 
-	// SessionID is a server-level session ID generated at Track() time.
-	// It is used for custom events published against the tracked server.
-	SessionID string
+	// Registries hold the injected-params and output-injection registries
+	// produced by the most recent tools/list (or rebuild) for this server.
+	// Nil until the first list; rebuilt on demand on the call path.
+	Registries atomic.Pointer[inject.Registries]
+
+	// RebuildTools re-fetches the server's ORIGINAL (uninjected) tool list
+	// so the call path can rebuild registries on instances that never
+	// served tools/list (per-request factory topology). session is the
+	// adapter's in-flight session object. Set by the adapter at Track time.
+	RebuildTools func(ctx context.Context, session any) ([]inject.NormalizedTool, error)
+
+	// reportedCollisions names the tools whose session_id collision has already
+	// been reported, so the error appears once per tool rather than on every
+	// tools/list. Strings only — nothing reachable from this value may
+	// reference the server (see the type comment above), and a set of tool
+	// names cannot.
+	collisionsMu       sync.Mutex
+	reportedCollisions map[string]struct{}
+}
+
+// ClaimCollisionReport reports whether toolName's session_id collision has not
+// yet been reported for this instance, marking it reported. It exists so the
+// error carries remediation once rather than on every tools/list.
+//
+// In the per-request factory topology a fresh instance per request makes this
+// a no-op and the error repeats per request. That matches the TypeScript SDK,
+// and it is the right outcome anyway: a collision that persists across every
+// request is a persistent misconfiguration worth saying every time.
+func (i *AgentCatInstance) ClaimCollisionReport(toolName string) bool {
+	i.collisionsMu.Lock()
+	defer i.collisionsMu.Unlock()
+	if _, seen := i.reportedCollisions[toolName]; seen {
+		return false
+	}
+	if i.reportedCollisions == nil {
+		i.reportedCollisions = make(map[string]struct{})
+	}
+	i.reportedCollisions[toolName] = struct{}{}
+	return true
+}
+
+// MergeRegistries folds one list's registries into the instance's, and
+// returns the merged value the call path should use.
+//
+// Adapters must call this rather than Registries.Store: a single tools/list
+// describes only the tools that list returned (pagination, tool filters and
+// session-scoped tools all narrow it), and a plain store would drop every
+// tool the last list did not name — which silently stops argument stripping
+// for them. The compare-and-swap loop keeps two concurrent lists on one
+// instance from losing each other's entries.
+func (i *AgentCatInstance) MergeRegistries(reg *inject.Registries) *inject.Registries {
+	if reg == nil {
+		return i.Registries.Load()
+	}
+	for {
+		prev := i.Registries.Load()
+		merged := inject.MergeRegistries(prev, reg)
+		if i.Registries.CompareAndSwap(prev, merged) {
+			return merged
+		}
+	}
 }
 
 // MCPcatInstance is the former name of AgentCatInstance.
@@ -286,6 +264,11 @@ type MCPcatInstance = AgentCatInstance
 // CustomEventData describes a customer-defined event published via
 // PublishCustomEvent.
 type CustomEventData struct {
+	// SessionID attributes this event to a session (ses_ handle). Takes precedence
+	// over a string first argument to PublishCustomEvent. When empty and the
+	// target is a tracked server, the event publishes without a session.
+	SessionID string
+
 	// ResourceName names the resource or action this event represents.
 	ResourceName string
 

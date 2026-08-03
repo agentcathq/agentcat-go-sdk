@@ -120,19 +120,24 @@ func TestTrackInternal_DoesNotRegisterGetMoreToolsWhenDisabled(t *testing.T) {
 }
 
 // TestTrackInternal_HooksMergeWithExisting verifies that when the user provides
-// their own hooks with a BeforeAny callback, Track merges its own hooks into the
-// same hooks instance, resulting in at least 2 OnBeforeAny entries.
+// their own hooks, Track appends AgentCat's list-injection hook to the same
+// struct rather than replacing it: both fire on one request.
 func TestTrackInternal_HooksMergeWithExisting(t *testing.T) {
-	mcpServer := server.NewMCPServer("test-hooks-merge", "1.0.0", server.WithToolCapabilities(true))
-
+	userHookRan := false
 	hooks := &server.Hooks{}
 	hooks.AddBeforeAny(func(ctx context.Context, id any, method mcp.MCPMethod, message any) {
-		// User-provided BeforeAny callback (no-op for testing)
+		userHookRan = true
 	})
+
+	mcpServer := server.NewMCPServer(
+		"test-hooks-merge",
+		"1.0.0",
+		server.WithToolCapabilities(true),
+		server.WithHooks(hooks),
+	)
 
 	opts := &Options{
 		DisableReportMissing: true,
-		Hooks:                hooks,
 	}
 
 	_, err := Track(mcpServer, "proj_hooks_merge", opts)
@@ -141,10 +146,20 @@ func TestTrackInternal_HooksMergeWithExisting(t *testing.T) {
 	}
 	defer unregisterServer(mcpServer)
 
-	// The user added 1 BeforeAny callback, and MCPCat's addTracingToHooks adds
-	// another. So we expect at least 2 entries.
-	if len(hooks.OnBeforeAny) < 2 {
-		t.Errorf("Expected at least 2 OnBeforeAny callbacks (user's + mcpcat's), got %d", len(hooks.OnBeforeAny))
+	if len(hooks.OnAfterListTools) != 1 {
+		t.Errorf("expected AgentCat's list hook on the user's struct, got %d", len(hooks.OnAfterListTools))
+	}
+
+	mcpServer.HandleMessage(
+		context.Background(),
+		[]byte(`{"jsonrpc":"2.0","id":1,"method":"tools/list","params":{}}`),
+	)
+
+	if !userHookRan {
+		t.Error("the user's BeforeAny hook must still run after Track")
+	}
+	if instance := getMCPcat(mcpServer); instance == nil || instance.Registries.Load() == nil {
+		t.Error("AgentCat's list injection did not run off the user's hooks")
 	}
 }
 

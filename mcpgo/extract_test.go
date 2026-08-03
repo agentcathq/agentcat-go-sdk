@@ -100,3 +100,33 @@ func TestExtractExtra_NonStructMessage(t *testing.T) {
 		t.Errorf("expected nil extra for non-struct message, got %v", extra)
 	}
 }
+
+func TestExtractResponse_CallToolResult(t *testing.T) {
+	result := &mcp.CallToolResult{
+		Content: []mcp.Content{
+			mcp.TextContent{Type: "text", Text: "hello world"},
+		},
+		StructuredContent: map[string]any{"greeting": "hello"},
+		IsError:           false,
+	}
+
+	resp := extractResponse(result)
+	if resp == nil {
+		t.Fatal("expected non-nil response")
+	}
+	if resp["isError"] != false {
+		t.Error("expected isError to be false")
+	}
+	if resp["content"] == nil {
+		t.Error("expected content to be present")
+	}
+	if resp["structuredContent"] == nil {
+		t.Error("expected structuredContent to be present")
+	}
+}
+
+func TestExtractResponse_NilResponse(t *testing.T) {
+	if resp := extractResponse(nil); resp != nil {
+		t.Errorf("expected nil response for nil input, got %v", resp)
+	}
+}

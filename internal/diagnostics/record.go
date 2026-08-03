@@ -4,7 +4,7 @@ import (
 	"strconv"
 	"time"
 
-	"go.agentcat.com/sdk/internal/logging"
+	"go.agentcat.com/sdk/v2/internal/logging"
 )
 
 // severityFor maps a log level to an OTLP severity number and text.

@@ -6,7 +6,7 @@ import (
 	"testing"
 
 	"github.com/modelcontextprotocol/go-sdk/mcp"
-	agentcat "go.agentcat.com/sdk"
+	agentcat "go.agentcat.com/sdk/v2"
 )
 
 func TestTrack_NilServer(t *testing.T) {
@@ -165,6 +165,34 @@ func Test_getMCPcat_UnregisteredServer(t *testing.T) {
 	instance := getMCPcat(server)
 	if instance != nil {
 		t.Fatal("expected nil for unregistered server")
+	}
+}
+
+// TestGetServerImpl_ReadsPrivateImplField is the change-detection guard for
+// the sanctioned private-field read: if the go-sdk renames or retypes the
+// server's impl field, this fails loudly instead of silently degrading to
+// nil server info on every event.
+func TestGetServerImpl_ReadsPrivateImplField(t *testing.T) {
+	impl := &mcp.Implementation{Name: "impl-probe", Version: "9.9.9"}
+	server := mcp.NewServer(impl, nil)
+
+	got := getServerImpl(server)
+	if got == nil {
+		t.Fatal("getServerImpl returned nil — did the go-sdk change its private impl field?")
+	}
+	if got.Name != "impl-probe" || got.Version != "9.9.9" {
+		t.Errorf("getServerImpl = %+v, want the NewServer implementation", got)
+	}
+
+	// The value is stored for the process lifetime and read by every
+	// concurrent tool call, so it must be a COPY: the customer still owns the
+	// Implementation they passed to NewServer and may mutate it.
+	if got == impl {
+		t.Fatal("getServerImpl must return a copy, not the customer's live Implementation")
+	}
+	impl.Name = "mutated-after-track"
+	if got.Name != "impl-probe" {
+		t.Errorf("customer mutation reached the captured impl: %+v", got)
 	}
 }
 

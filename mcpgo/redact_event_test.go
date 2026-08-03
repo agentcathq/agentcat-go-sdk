@@ -2,6 +2,7 @@ package mcpgo
 
 import (
 	"context"
+	"fmt"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -11,7 +12,7 @@ import (
 	"time"
 
 	"github.com/mark3labs/mcp-go/mcp"
-	agentcat "go.agentcat.com/sdk"
+	agentcat "go.agentcat.com/sdk/v2"
 )
 
 // captureAPI is a stand-in for the AgentCat API that records raw request
@@ -105,7 +106,7 @@ func TestRedactEvent_HookRewritesEventBeforePublish(t *testing.T) {
 	})
 
 	result := callToolHTTP(t, mcpClient, "add_todo", map[string]any{
-		"title":       "Secret task title",
+		"title":       "Secret session title",
 		"description": "Sensitive description",
 	})
 	assertContains(t, resultText(result), "Added todo")
@@ -127,7 +128,7 @@ func TestRedactEvent_HookRewritesEventBeforePublish(t *testing.T) {
 			if !strings.Contains(b, `"replaced":true`) {
 				t.Errorf("published tool-call event does not contain the hook's rewrite: %s", b)
 			}
-			if strings.Contains(b, "Secret task title") {
+			if strings.Contains(b, "Secret session title") {
 				t.Errorf("raw parameters leaked past the RedactEvent hook: %s", b)
 			}
 		}
@@ -135,8 +136,9 @@ func TestRedactEvent_HookRewritesEventBeforePublish(t *testing.T) {
 }
 
 // TestRedactEvent_NilDropsEvent verifies over a real HTTP transport that
-// returning nil from the hook drops the event entirely while other event
-// types still publish and the server continues to operate.
+// returning nil from the hook drops that event entirely while the events it
+// keeps still publish and the server continues to operate. v2 publishes only
+// tool-call events, so the drop is keyed on the recorded arguments.
 func TestRedactEvent_NilDropsEvent(t *testing.T) {
 	resetPublisher(t)
 	api := newCaptureAPI(t)
@@ -146,7 +148,7 @@ func TestRedactEvent_NilDropsEvent(t *testing.T) {
 		DisableToolCallContext: true,
 		APIBaseURL:             api.srv.URL,
 		RedactEvent: func(event *agentcat.Event) (*agentcat.Event, error) {
-			if event.GetEventType() == "mcp:tools/call" {
+			if strings.Contains(fmt.Sprint(event.Parameters), "Dropped") {
 				return nil, nil // drop
 			}
 			return event, nil
@@ -154,30 +156,40 @@ func TestRedactEvent_NilDropsEvent(t *testing.T) {
 	})
 
 	result := callToolHTTP(t, mcpClient, "add_todo", map[string]any{
-		"title":       "Should be dropped",
+		"title":       "Dropped todo",
 		"description": "This event never reaches the API",
 	})
 	assertContains(t, resultText(result), "Added todo")
 
-	// Non-tool-call events (e.g. initialize) still flow, proving the pipeline
-	// is alive while tool-call events are dropped.
+	kept := callToolHTTP(t, mcpClient, "add_todo", map[string]any{
+		"title":       "Kept todo",
+		"description": "This event does reach the API",
+	})
+	assertContains(t, resultText(kept), "Added todo")
+
+	// The kept event proves the pipeline is alive while the other is dropped.
 	arrived := api.waitFor(3*time.Second, func(bodies []string) bool {
-		return len(bodies) > 0
+		for _, b := range bodies {
+			if strings.Contains(b, "Kept todo") {
+				return true
+			}
+		}
+		return false
 	})
 	if !arrived {
-		t.Fatal("no events at all reached the capture API")
+		t.Fatal("the kept tool-call event never reached the capture API")
 	}
-	time.Sleep(500 * time.Millisecond) // settle: give a dropped event time to (not) arrive
+	settleForAbsentPublishes()
 
 	for _, b := range api.snapshot() {
-		if strings.Contains(b, "mcp:tools/call") {
-			t.Errorf("tool-call event reached the API despite nil return: %s", b)
+		if strings.Contains(b, "Dropped todo") {
+			t.Errorf("dropped event reached the API despite nil return: %s", b)
 		}
 	}
 
 	// The server is still fully operational.
 	listResult := callToolHTTP(t, mcpClient, "list_todos", map[string]any{})
-	assertContains(t, resultText(listResult), "Should be dropped")
+	assertContains(t, resultText(listResult), "Dropped todo")
 }
 
 // TestRedactEvent_PanicInHookDoesNotCrashServer verifies that a panic inside
@@ -194,12 +206,12 @@ func TestRedactEvent_PanicInHookDoesNotCrashServer(t *testing.T) {
 	})
 
 	result1 := callToolHTTP(t, mcpClient, "add_todo", map[string]any{
-		"title":       "Secret task",
+		"title":       "Secret session",
 		"description": "Contains sensitive data",
 	})
 	assertContains(t, resultText(result1), "Added todo")
 
 	// Second call — the server is still fully operational.
 	result2 := callToolHTTP(t, mcpClient, "list_todos", map[string]any{})
-	assertContains(t, resultText(result2), "Secret task")
+	assertContains(t, resultText(result2), "Secret session")
 }

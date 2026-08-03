@@ -10,8 +10,8 @@ import (
 	"maps"
 	"regexp"
 
-	"go.agentcat.com/sdk/internal/core"
-	"go.agentcat.com/sdk/internal/walk"
+	"go.agentcat.com/sdk/v2/internal/core"
+	"go.agentcat.com/sdk/v2/internal/walk"
 )
 
 const (

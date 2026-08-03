@@ -1,10 +1,12 @@
 package registry
 
 import (
+	"runtime"
 	"sync"
 	"testing"
+	"time"
 
-	"go.agentcat.com/sdk/internal/core"
+	"go.agentcat.com/sdk/v2/internal/core"
 )
 
 type mockServer struct {
@@ -14,7 +16,7 @@ type mockServer struct {
 func TestRegister(t *testing.T) {
 	tests := []struct {
 		name     string
-		server   any
+		server   *mockServer
 		instance *core.AgentCatInstance
 	}{
 		{
@@ -60,19 +62,8 @@ func TestRegister_PanicsOnNil(t *testing.T) {
 		}
 	}()
 
-	Register(nil, &core.AgentCatInstance{ProjectID: "proj"})
-}
-
-func TestRegister_PanicsOnNonPointer(t *testing.T) {
-	clearRegistry()
-
-	defer func() {
-		if r := recover(); r == nil {
-			t.Error("Register(nonPointer, ...) should panic")
-		}
-	}()
-
-	Register(mockServer{name: "value"}, &core.AgentCatInstance{ProjectID: "proj"})
+	var server *mockServer
+	Register(server, &core.AgentCatInstance{ProjectID: "proj"})
 }
 
 func TestGet(t *testing.T) {
@@ -107,6 +98,20 @@ func TestGet(t *testing.T) {
 			name: "get nil server",
 			setupFunc: func() any {
 				return nil
+			},
+			wantNil: true,
+		},
+		{
+			name: "get non-pointer value",
+			setupFunc: func() any {
+				return mockServer{name: "value"}
+			},
+			wantNil: true,
+		},
+		{
+			name: "get unhashable value",
+			setupFunc: func() any {
+				return []string{"unhashable"}
 			},
 			wantNil: true,
 		},
@@ -162,6 +167,18 @@ func TestUnregister(t *testing.T) {
 				return nil
 			},
 		},
+		{
+			name: "unregister non-pointer value",
+			setupFunc: func() any {
+				return mockServer{name: "value"}
+			},
+		},
+		{
+			name: "unregister unhashable value",
+			setupFunc: func() any {
+				return []string{"unhashable"}
+			},
+		},
 	}
 
 	for _, tt := range tests {
@@ -179,35 +196,6 @@ func TestUnregister(t *testing.T) {
 			}
 		})
 	}
-}
-
-func TestMustBePointer(t *testing.T) {
-	t.Run("pointer type does not panic", func(t *testing.T) {
-		defer func() {
-			if r := recover(); r != nil {
-				t.Errorf("mustBePointer panicked for pointer: %v", r)
-			}
-		}()
-		mustBePointer(&mockServer{name: "test"})
-	})
-
-	t.Run("nil panics", func(t *testing.T) {
-		defer func() {
-			if r := recover(); r == nil {
-				t.Error("mustBePointer should panic for nil")
-			}
-		}()
-		mustBePointer(nil)
-	})
-
-	t.Run("non-pointer panics", func(t *testing.T) {
-		defer func() {
-			if r := recover(); r == nil {
-				t.Error("mustBePointer should panic for non-pointer")
-			}
-		}()
-		mustBePointer(mockServer{name: "test"})
-	})
 }
 
 func TestConcurrentAccess(t *testing.T) {
@@ -414,8 +402,38 @@ func TestRegisterOverwrite(t *testing.T) {
 	}
 }
 
+func TestRegistryEntriesAreReleasedAfterGC(t *testing.T) {
+	type fakeServer struct{ pad [64]byte }
+	before := Count()
+	for i := 0; i < 100; i++ {
+		s := &fakeServer{}
+		Register(s, &core.AgentCatInstance{ProjectID: "p"})
+	}
+	deadline := time.Now().Add(5 * time.Second)
+	for Count() > before && time.Now().Before(deadline) {
+		runtime.GC()
+		time.Sleep(10 * time.Millisecond)
+	}
+	if got := Count(); got > before {
+		t.Errorf("registry leaked %d entries after GC", got-before)
+	}
+}
+
+func TestRegistryLiveServerSurvivesGC(t *testing.T) {
+	type fakeServer struct{ pad [64]byte }
+	s := &fakeServer{}
+	inst := &core.AgentCatInstance{ProjectID: "p"}
+	Register(s, inst)
+	runtime.GC()
+	runtime.GC()
+	if Get(s) != inst {
+		t.Error("live server must stay registered")
+	}
+	runtime.KeepAlive(s)
+}
+
 func clearRegistry() {
 	registryMu.Lock()
 	defer registryMu.Unlock()
-	serverMCPcatMap = make(map[any]*core.AgentCatInstance)
+	serverMap = make(map[uintptr]entry)
 }

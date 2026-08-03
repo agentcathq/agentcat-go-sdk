@@ -7,8 +7,8 @@ import (
 	"net/http/httptest"
 	"testing"
 
-	"go.agentcat.com/sdk/internal/core"
-	"go.agentcat.com/sdk/internal/logging"
+	"go.agentcat.com/sdk/v2/internal/core"
+	"go.agentcat.com/sdk/v2/internal/logging"
 )
 
 func newOTLPTestServer(t *testing.T) (*httptest.Server, *[]byte, *[]string) {
@@ -200,4 +200,32 @@ func attrMap(attrs []otlpAttribute) map[string]string {
 		m[a.Key] = a.Value.StringValue
 	}
 	return m
+}
+
+// TestOTLPSessionlessOmitsSessionAttribute pins that a sessionless event emits
+// no mcp.session_id attribute and gets a random trace ID rather than the hash
+// of the empty string — otherwise every sessionless span across every server
+// would join one trace. The empty-attribute filter and TraceID's random
+// fallback already do this; the test exists so a refactor cannot quietly undo
+// it now that validation makes sessionless events routine.
+func TestOTLPSessionlessOmitsSessionAttribute(t *testing.T) {
+	e, err := NewOTLPExporter(core.ExporterConfig{Type: "otlp", Endpoint: "https://otel.example.com"}, logging.New())
+	if err != nil {
+		t.Fatalf("NewOTLPExporter: %v", err)
+	}
+	evt := testEvent()
+	evt.SetSessionIdNil()
+
+	a := e.convertToSpan(evt)
+	for _, attr := range a.Attributes {
+		if attr.Key == "mcp.session_id" {
+			t.Errorf("sessionless span carries mcp.session_id = %q", attr.Value.StringValue)
+		}
+	}
+	if a.TraceID == e.convertToSpan(evt).TraceID {
+		t.Error(`sessionless spans must get independent random trace IDs, not one shared hash of ""`)
+	}
+	if len(a.TraceID) != 32 {
+		t.Errorf("trace ID = %q, want 32 hex chars", a.TraceID)
+	}
 }

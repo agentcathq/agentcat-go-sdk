@@ -12,8 +12,8 @@ import (
 	"time"
 
 	"github.com/segmentio/ksuid"
-	"go.agentcat.com/sdk/internal/core"
-	"go.agentcat.com/sdk/internal/logging"
+	"go.agentcat.com/sdk/v2/internal/core"
+	"go.agentcat.com/sdk/v2/internal/logging"
 )
 
 var uuidv7Pattern = regexp.MustCompile(
@@ -339,5 +339,70 @@ func TestMapEventType(t *testing.T) {
 		if got := mapEventType(in); got != want {
 			t.Errorf("mapEventType(%q) = %q, want %q", in, got, want)
 		}
+	}
+}
+
+// sessionlessEvent is a tool-call event published with no session — what
+// validation produces for a session_id this server did not issue, or for a
+// tool that declares its own session_id parameter.
+func sessionlessEvent() *core.Event {
+	evt := testEvent()
+	evt.SetSessionIdNil()
+	return evt
+}
+
+// TestPostHogExporter_SessionlessOmitsSessionProperties pins that a sessionless
+// event carries no $session_id at all. ToUUIDv7("") is a single fixed UUID, so
+// emitting it would silently merge every sessionless event across every
+// customer's server into one PostHog session.
+func TestPostHogExporter_SessionlessOmitsSessionProperties(t *testing.T) {
+	e, body := newPostHogExporterForTest(t, true)
+
+	evt := sessionlessEvent()
+	if err := e.Export(evt); err != nil {
+		t.Fatalf("Export: %v", err)
+	}
+	var payload posthogBatchPayload
+	if err := json.Unmarshal(*body, &payload); err != nil {
+		t.Fatal(err)
+	}
+
+	forbidden := ToUUIDv7("")
+	for _, capture := range payload.Batch {
+		if v, ok := capture.Properties["$session_id"]; ok {
+			t.Errorf("%s carries $session_id = %v; a sessionless event must omit it", capture.Event, v)
+		}
+		if v, ok := capture.Properties["$ai_session_id"]; ok {
+			t.Errorf("%s carries $ai_session_id = %v; a sessionless event must omit it", capture.Event, v)
+		}
+		for k, v := range capture.Properties {
+			if v == forbidden {
+				t.Errorf("%s property %s = the ToUUIDv7(\"\") sentinel", capture.Event, k)
+			}
+		}
+	}
+
+	// The AI span still stands alone: it traces under its own event.
+	var span posthogCaptureEvent
+	for _, c := range payload.Batch {
+		if c.Event == "$ai_span" {
+			span = c
+		}
+	}
+	if span.Event == "" {
+		t.Fatal("AI tracing enabled: expected an $ai_span in the batch")
+	}
+	if want := ToUUIDv7(evt.GetId()); span.Properties["$ai_trace_id"] != want {
+		t.Errorf("$ai_trace_id = %v, want the per-event trace %q", span.Properties["$ai_trace_id"], want)
+	}
+}
+
+// A sessionless event also loses its distinct_id fallback, so it must land on
+// "anonymous" rather than the empty string.
+func TestPostHogExporter_SessionlessDistinctIDIsAnonymous(t *testing.T) {
+	evt := sessionlessEvent()
+	evt.IdentifyActorGivenId = nil
+	if got := distinctID(evt); got != "anonymous" {
+		t.Errorf("distinct_id = %q, want anonymous", got)
 	}
 }

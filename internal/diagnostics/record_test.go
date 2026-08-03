@@ -3,7 +3,7 @@ package diagnostics
 import (
 	"testing"
 
-	"go.agentcat.com/sdk/internal/logging"
+	"go.agentcat.com/sdk/v2/internal/logging"
 )
 
 func TestBuildRecord_Severity(t *testing.T) {

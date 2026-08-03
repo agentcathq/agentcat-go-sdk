@@ -35,7 +35,7 @@ jobs:
               major = $2
               minor = $3
               patch = $4
-              if (major == 0 && minor >= 40) {
+              if (major == 0 && minor >= 53) {
                 minor_key = major "." minor
                 full_version = major "." minor "." patch
                 if (!(minor_key in latest_patch) || patch > latest_patch[minor_key]) {
@@ -54,7 +54,7 @@ jobs:
               printf "]"
             }')
 
-          echo "Filtered versions (>= v0.40.0, latest patch per minor):"
+          echo "Filtered versions (>= v0.53.0, latest patch per minor):"
           echo "$VERSIONS" | jq -r '.[]' | sort -V
 
           VERSION_COUNT=$(echo "$VERSIONS" | jq '. | length')
@@ -95,8 +95,19 @@ jobs:
       - name: Run tests
         working-directory: ./mcpgo
         run: |
+          # The compat tripwire asserts that mcpgo/compat.go's shims RESOLVE,
+          # which is only meaningful on the version go.mod pins. Every matrix
+          # entry below it is deliberately older, where absence is the correct
+          # answer, so the tripwire is excluded. Behavior on those versions is
+          # covered by the untagged tests, which gate on capability instead.
+          MINOR=$(echo "${{ matrix.version }}" | cut -d. -f2)
+          TAGS=""
+          if [ "$MINOR" -lt 57 ]; then
+            TAGS="-tags mcpgo_legacy"
+            echo "mcp-go v${{ matrix.version }} is older than the pinned version: excluding the pinned-version tripwire"
+          fi
           echo "Running mcpgo test suite with mcp-go v${{ matrix.version }}..."
-          go test -v -race ./...
+          go test -v -race $TAGS ./...
 
       - name: Test result
         if: success()

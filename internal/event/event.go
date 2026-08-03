@@ -1,5 +1,5 @@
 package event
 
-import "go.agentcat.com/sdk/internal/core"
+import "go.agentcat.com/sdk/v2/internal/core"
 
 type Event = core.Event

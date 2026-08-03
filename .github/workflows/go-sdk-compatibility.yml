@@ -35,7 +35,7 @@ jobs:
               major = $2
               minor = $3
               patch = $4
-              if ((major == 1 && minor >= 1) || major > 1) {
+              if ((major == 1 && minor >= 4) || major > 1) {
                 minor_key = major "." minor
                 full_version = major "." minor "." patch
                 if (!(minor_key in latest_patch) || patch > latest_patch[minor_key]) {
@@ -54,7 +54,7 @@ jobs:
               printf "]"
             }')
 
-          echo "Filtered versions (>= v1.1.0, latest patch per minor):"
+          echo "Filtered versions (>= v1.4.0, latest patch per minor):"
           echo "$VERSIONS" | jq -r '.[]' | sort -V
 
           VERSION_COUNT=$(echo "$VERSIONS" | jq '. | length')
@@ -95,8 +95,20 @@ jobs:
       - name: Run tests
         working-directory: ./officialsdk
         run: |
+          # MCP multi-round-trip arrived in go-sdk v1.7.0. The adapter detects
+          # its absence at runtime (officialsdk/compat.go), but the MRTR tests
+          # build mcp.InputRequestMap / InputResponseMap literals that no shim
+          # can stand in for, so they are excluded below v1.7.0. Keyed on the
+          # minor version, not an exact string, so v1.8.0+ keeps full coverage.
+          MAJOR=$(echo "${{ matrix.version }}" | cut -d. -f1)
+          MINOR=$(echo "${{ matrix.version }}" | cut -d. -f2)
+          TAGS=""
+          if [ "$MAJOR" -eq 1 ] && [ "$MINOR" -lt 7 ]; then
+            TAGS="-tags gosdk_legacy"
+            echo "go-sdk v${{ matrix.version }} predates MRTR: excluding MRTR tests"
+          fi
           echo "Running officialsdk test suite with go-sdk v${{ matrix.version }}..."
-          go test -v -race ./...
+          go test -v -race $TAGS ./...
 
       - name: Test result
         if: success()

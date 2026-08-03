@@ -1,3 +1,43 @@
+// Package agentcat is the shared integration surface of the AgentCat Go SDK.
+//
+// # Which package do I import?
+//
+// If you are instrumenting an MCP server, you want an ADAPTER, not this
+// package:
+//
+//	go.agentcat.com/sdk/mcpgo/v2        // github.com/mark3labs/mcp-go servers
+//	go.agentcat.com/sdk/officialsdk/v2  // github.com/modelcontextprotocol/go-sdk servers
+//
+// Each adapter exposes a single Track entry point plus its own Options, and
+// re-exports every type an end user needs (UserIdentity, Event, ExporterConfig,
+// CustomEventData), so a customer's server never imports this package
+// directly.
+//
+// # What is in here
+//
+// This package holds everything the two adapters share and neither may
+// duplicate: the pure schema-injection engine, the stateless session/agent handle
+// primitives, the agent-facing copy (byte-identical across every AgentCat
+// SDK), event construction, the server registry, and the publisher. The
+// adapters live in their own Go modules, so they cannot reach this module's
+// internal/ packages — everything they need is re-exported here, and nothing
+// else is exported.
+//
+// The API here is stable for the adapters that ship with this SDK. It is not
+// a general-purpose API: it may change in a minor release if both adapters
+// change with it.
+//
+// # How the pieces fit together
+//
+// On tools/list an adapter normalises its library's tools into
+// []NormalizedTool, calls BuildInjectedTools, writes the mutated schemas back
+// onto its own copies, and folds the returned Registries into the server's
+// AgentCatInstance. On tools/call it resolves handles with ResolveSessionHandle,
+// removes what the registries say it injected with StripToolArguments,
+// dispatches, decorates a COPY of the response with BuildMintBackText and
+// BuildHandleMirror (the wire only — the published event always carries the
+// customer's raw request and undecorated response), and publishes one event
+// built by NewToolCallEvent.
 package agentcat
 
 import (
@@ -5,15 +45,15 @@ import (
 	"errors"
 	"os"
 
-	"go.agentcat.com/sdk/internal/core"
-	"go.agentcat.com/sdk/internal/diagnostics"
-	"go.agentcat.com/sdk/internal/event"
-	"go.agentcat.com/sdk/internal/logging"
-	"go.agentcat.com/sdk/internal/publisher"
-	"go.agentcat.com/sdk/internal/redaction"
-	"go.agentcat.com/sdk/internal/registry"
-	"go.agentcat.com/sdk/internal/session"
-	"go.agentcat.com/sdk/internal/validation"
+	"go.agentcat.com/sdk/v2/internal/core"
+	"go.agentcat.com/sdk/v2/internal/diagnostics"
+	"go.agentcat.com/sdk/v2/internal/event"
+	"go.agentcat.com/sdk/v2/internal/handles"
+	"go.agentcat.com/sdk/v2/internal/logging"
+	"go.agentcat.com/sdk/v2/internal/publisher"
+	"go.agentcat.com/sdk/v2/internal/redaction"
+	"go.agentcat.com/sdk/v2/internal/registry"
+	"go.agentcat.com/sdk/v2/internal/validation"
 )
 
 // Sentinel errors for Track validation.
@@ -25,7 +65,7 @@ var (
 // --- Integration API (used by mcpgo/ and officialsdk/ modules) ---
 
 // RegisterServer stores the AgentCat instance for a given server in the global registry.
-func RegisterServer(server any, instance *AgentCatInstance) {
+func RegisterServer[T any](server *T, instance *AgentCatInstance) {
 	registry.Register(server, instance)
 }
 
@@ -77,32 +117,6 @@ func LogRecoveredPanic(where string, recovered any) {
 	logging.New().Errorf("Recovered panic in %s: %v - event dropped", where, recovered)
 }
 
-// NewEvent creates an SDK-agnostic event from session data and basic metadata.
-func NewEvent(sess *Session, eventType string, duration *int32, isError bool, errorDetails error) *Event {
-	return event.NewEvent(sess, eventType, duration, isError, errorDetails)
-}
-
-// NewSessionID generates a new unique session ID with the AgentCat prefix.
-func NewSessionID() string {
-	return session.GenerateSessionID()
-}
-
-// IsPlaceholderSessionID reports whether raw is a placeholder rather than a
-// real transport session ID ("", "stdio", or "nosessionid"). Placeholder IDs
-// must not be used to derive a deterministic session ID; adapters fall back
-// to a random session ID instead.
-func IsPlaceholderSessionID(raw string) bool {
-	return session.IsPlaceholderSessionID(raw)
-}
-
-// DeriveSessionID derives a deterministic session ID from an MCP transport
-// session ID and optional project ID. The same inputs always produce the same
-// session ID, so sessions remain stable across server restarts. The
-// derivation matches the TypeScript SDK's deriveSessionIdFromMCPSession.
-func DeriveSessionID(mcpSessionID, projectID string) string {
-	return session.DeriveSessionIDFromMCPSession(mcpSessionID, projectID)
-}
-
 // ValidateTags validates customer-supplied event tags against AgentCat's
 // client-side constraints, dropping (and warn-logging) invalid entries.
 // Returns nil when no valid entries remain.
@@ -110,26 +124,15 @@ func ValidateTags(tags map[string]string) map[string]string {
 	return validation.ValidateTags(tags)
 }
 
-// MergeIdentities merges a new identity into a previous one: UserID and
-// UserName are overwritten while UserData fields are merged (next wins).
-func MergeIdentities(previous, next *UserIdentity) *UserIdentity {
-	return core.MergeIdentities(previous, next)
-}
-
 // GetDependencyVersion returns the version of the given module from build info,
 // or "dev" if the module is not found.
 func GetDependencyVersion(modulePath string) string {
-	return session.GetDependencyVersion(modulePath)
+	return core.GetDependencyVersion(modulePath)
 }
 
 // NewEventID generates a new unique event ID with the AgentCat prefix.
 func NewEventID() string {
 	return event.NewEventID()
-}
-
-// CreateIdentifyEvent creates an Event for agentcat:identify event type.
-func CreateIdentifyEvent(sess *Session) *Event {
-	return event.CreateIdentifyEvent(sess)
 }
 
 // RedactEvent applies the redaction function to sensitive fields in the event.
@@ -162,3 +165,102 @@ func ResolveAPIBaseURL(optionURL string) string {
 func Ptr[T any](v T) *T {
 	return core.Ptr(v)
 }
+
+// ── v2 handle primitives (integration API for adapters) ─────────────────────
+
+type (
+	// SessionSource records how a call's session ID was obtained: echoed by the
+	// agent, minted by this SDK, or derived from the customer's hook.
+	SessionSource = handles.SessionSource
+
+	// SessionResolution is the outcome of one call's stateless session resolution.
+	SessionResolution = handles.SessionResolution
+)
+
+const (
+	// SessionSourceSupplied: the agent echoed a session_id argument.
+	SessionSourceSupplied = handles.SessionSourceSupplied
+	// SessionSourceMinted: this SDK issued a fresh session for this call.
+	SessionSourceMinted = handles.SessionSourceMinted
+	// SessionSourceHook: derived from the customer's ResolveSessionID callback.
+	SessionSourceHook = handles.SessionSourceHook
+	// SessionSourceInvalid: the agent sent a session_id this server never
+	// issued. The call publishes sessionless and the agent is told to re-send
+	// the real one.
+	SessionSourceInvalid = handles.SessionSourceInvalid
+	// SessionSourceForeign: the customer's own tool declares session_id, so
+	// AgentCat never injected one there. The call publishes sessionless and
+	// nothing is said to the agent about a parameter that is not ours.
+	SessionSourceForeign = handles.SessionSourceForeign
+)
+
+// IsValidSessionID reports whether value is a session ID this SDK issued —
+// the ses_ prefix plus a 27-character base62 KSUID. Anything else was
+// invented by the agent or belongs to someone else, and is never adopted into
+// Event.SessionId, which both redaction hooks are exempt from.
+func IsValidSessionID(value string) bool { return handles.IsValidSessionID(value) }
+
+// MintSessionID returns a fresh random ses_-prefixed session ID.
+func MintSessionID() string { return handles.MintSessionID() }
+
+// DeriveSessionID maps a customer correlation ID (plus the project ID) onto a
+// stable ses_ session ID. Deterministic across processes, restarts, and every
+// AgentCat SDK: the same input always yields the same session.
+func DeriveSessionID(customerID, projectID string) string {
+	return handles.DeriveSessionID(customerID, projectID)
+}
+
+// ExtractHandle returns args[name] when it is a string with non-blank
+// content, VERBATIM (never trimmed or reformatted). It is shape-agnostic
+// because it is shared with agent_id, which this SDK never validates;
+// ResolveSessionHandle applies IsValidSessionID to the session handle.
+func ExtractHandle(args map[string]any, name string) (string, bool) {
+	return handles.ExtractHandle(args, name)
+}
+
+// ResolveSessionHandle resolves the session for one call, statelessly. hook is
+// non-nil in hook mode (the adapter closes over the customer's ResolveSessionID),
+// in which case the supplied arguments are ignored entirely. Never fails: a
+// blank, errored, or panicking hook mints a session silently.
+//
+// sessionParamIsOurs comes from SessionParamIsOurs and must be computed from
+// registries the adapter has already loaded — resolve AFTER loading them.
+// Passing true for a tool the customer owns would adopt their value.
+func ResolveSessionHandle(args map[string]any, hook func() (string, error), projectID string, sessionParamIsOurs bool) SessionResolution {
+	return handles.ResolveSessionHandle(args, hook, projectID, sessionParamIsOurs)
+}
+
+// ClampAgentID prepares a supplied agent_id for the SDK tag channel, which
+// bypasses customer tag validation: newlines become spaces and the value is
+// truncated to 200 bytes on a rune boundary.
+func ClampAgentID(v string) string { return handles.ClampAgentID(v) }
+
+// BuildMintBackText renders the trailing [MCP INSTRUCTIONS] content block for
+// one call, or "" when there is nothing to say. It is the single decision
+// point for whether a call announces anything: minted announces the new
+// handle, invalid corrects the agent without issuing a replacement, and hook,
+// foreign and supplied say nothing. Adapters must not re-derive it.
+func BuildMintBackText(res SessionResolution) string { return handles.BuildMintBackText(res) }
+
+// SessionParamIsOurs reports whether the session_id argument on a call to
+// toolName is AgentCat's to read. A tool absent from the registries counts as
+// ours, so a call arriving before any tools/list is still validated.
+func SessionParamIsOurs(toolName string, reg *Registries) bool {
+	return injectSessionParamIsOurs(toolName, reg)
+}
+
+// EventContext is the per-request identity and handle state an adapter
+// resolves before building an event.
+type EventContext = event.EventContext
+
+// NewToolCallEvent builds the single mcp:tools/call event for one call.
+// duration is nil when nothing of this SDK's timed the call. Returns nil when
+// the context is unusable.
+func NewToolCallEvent(ec *EventContext, duration *int32, isError bool, errorDetails error) *Event {
+	return event.NewToolCallEvent(ec, duration, isError, errorDetails)
+}
+
+// ApplySDKTags stamps the SDK-owned tags (session source, agent ID and its
+// source, protocol version, MRTR) onto an event. Call it AFTER the customer's
+// own tags: the SDK's win, and they are exempt from the customer tag cap.
+func ApplySDKTags(evt *Event, ec *EventContext) { event.ApplySDKTags(evt, ec) }

@@ -8,8 +8,8 @@ import (
 	"strings"
 	"testing"
 
-	"go.agentcat.com/sdk/internal/core"
-	"go.agentcat.com/sdk/internal/logging"
+	"go.agentcat.com/sdk/v2/internal/core"
+	"go.agentcat.com/sdk/v2/internal/logging"
 )
 
 // sentryEnvelope is one received envelope split into its JSON lines.
@@ -293,5 +293,32 @@ func TestSentryExporter_ErrorWithTracingCorrelatesTransaction(t *testing.T) {
 	}
 	if errTrace["trace_id"] != txTrace["trace_id"] {
 		t.Errorf("error trace_id = %v, want transaction trace_id", errTrace["trace_id"])
+	}
+}
+
+// TestSentrySessionlessOmitsSessionID pins that a sessionless event carries no
+// session ID in any of the three places Sentry receives one — log attributes,
+// the transaction's extra map, and its mcp context — and that its trace ID is
+// random rather than the hash of "".
+func TestSentrySessionlessOmitsSessionID(t *testing.T) {
+	e, _, _ := newSentryExporterForTest(t, true)
+	evt := testEvent()
+	evt.SetSessionIdNil()
+
+	if _, ok := e.buildLogAttributes(evt)["sessionId"]; ok {
+		t.Error("sessionless event must not carry a sessionId log attribute")
+	}
+
+	tx := e.eventToTransaction(evt, TraceID(""), SpanID(evt.GetId()))
+	if v, ok := tx.Extra["session_id"]; ok {
+		t.Errorf("sessionless transaction carries extra.session_id = %v", v)
+	}
+	if mcpCtx, ok := tx.Contexts["mcp"].(map[string]any); ok {
+		if v, ok := mcpCtx["session_id"]; ok {
+			t.Errorf("sessionless transaction carries contexts.mcp.session_id = %v", v)
+		}
+	}
+	if TraceID(evt.GetSessionId()) == TraceID(evt.GetSessionId()) {
+		t.Error(`sessionless events must get independent random trace IDs, not one shared hash of ""`)
 	}
 }

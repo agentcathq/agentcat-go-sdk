@@ -4,7 +4,7 @@ import (
 	"strconv"
 	"testing"
 
-	"go.agentcat.com/sdk/internal/logging"
+	"go.agentcat.com/sdk/v2/internal/logging"
 )
 
 func TestInit_EnabledByDefault(t *testing.T) {

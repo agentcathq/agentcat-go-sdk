@@ -4,6 +4,7 @@ import (
 	"context"
 	"io"
 	"log"
+	"strings"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -12,7 +13,7 @@ import (
 	"github.com/mark3labs/mcp-go/client/transport"
 	"github.com/mark3labs/mcp-go/mcp"
 	"github.com/mark3labs/mcp-go/server"
-	agentcat "go.agentcat.com/sdk"
+	agentcat "go.agentcat.com/sdk/v2"
 )
 
 // setupStdio creates a real stdio-based MCP client connected to a tracked
@@ -101,6 +102,181 @@ func setupStdio(t *testing.T, opts *Options) *client.Client {
 	})
 
 	return mcpClient
+}
+
+// setupSpyStdio is setupStdio with events routed to a mock publisher instead of
+// the real one, so stdio tests can assert on the exact events AgentCat would
+// send. It installs exactly what Track installs (installTracking).
+func setupSpyStdio(t *testing.T, opts *Options) (*client.Client, *mockPublisher) {
+	t.Helper()
+
+	if opts == nil {
+		opts = DefaultOptions()
+	}
+
+	mcpServer, _ := CreateFullServer()
+	instance := newTestInstance(mcpServer, "test_project", opts)
+	agentcat.RegisterServer(mcpServer, instance)
+
+	mock := &mockPublisher{}
+	installTracking(mcpServer, instance, opts, mock.publish)
+
+	clientToServerReader, clientToServerWriter := io.Pipe()
+	serverToClientReader, serverToClientWriter := io.Pipe()
+
+	stdioServer := server.NewStdioServer(mcpServer)
+	stdioServer.SetErrorLogger(log.New(io.Discard, "", 0))
+
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+
+	serverDone := make(chan error, 1)
+	go func() {
+		serverDone <- stdioServer.Listen(ctx, clientToServerReader, serverToClientWriter)
+	}()
+
+	fail := func(format string, args ...any) {
+		cancel()
+		clientToServerWriter.Close()
+		serverToClientWriter.Close()
+		unregisterServer(mcpServer)
+		t.Fatalf(format, args...)
+	}
+
+	trans := transport.NewIO(serverToClientReader, clientToServerWriter, nil)
+	if err := trans.Start(ctx); err != nil {
+		fail("setupSpyStdio: trans.Start failed: %v", err)
+	}
+
+	mcpClient := client.NewClient(trans)
+	if err := mcpClient.Start(ctx); err != nil {
+		fail("setupSpyStdio: client.Start failed: %v", err)
+	}
+
+	initReq := mcp.InitializeRequest{}
+	initReq.Params.ProtocolVersion = mcp.LATEST_PROTOCOL_VERSION
+	initReq.Params.ClientInfo = mcp.Implementation{Name: "spy-stdio-client", Version: "1.0.0"}
+	if _, err := mcpClient.Initialize(ctx, initReq); err != nil {
+		fail("setupSpyStdio: Initialize failed: %v", err)
+	}
+
+	t.Cleanup(func() {
+		cancel()
+		clientToServerWriter.Close()
+		serverToClientWriter.Close()
+		<-serverDone
+		mcpClient.Close()
+		unregisterServer(mcpServer)
+	})
+
+	return mcpClient, mock
+}
+
+// TestStdio_FullSessionPublishesOnlyToolCalls drives the whole MCP surface the
+// fixture exposes over a real stdio transport and pins the v2 rule: tool calls
+// are the only thing that publishes.
+func TestStdio_FullSessionPublishesOnlyToolCalls(t *testing.T) {
+	mcpClient, mock := setupSpyStdio(t, nil)
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+
+	if _, err := mcpClient.ListTools(ctx, mcp.ListToolsRequest{}); err != nil {
+		t.Fatalf("ListTools: %v", err)
+	}
+	readReq := mcp.ReadResourceRequest{}
+	readReq.Params.URI = "todo://about"
+	if _, err := mcpClient.ReadResource(ctx, readReq); err != nil {
+		t.Fatalf("ReadResource: %v", err)
+	}
+	promptReq := mcp.GetPromptRequest{}
+	promptReq.Params.Name = "summarize_todos"
+	promptReq.Params.Arguments = map[string]string{"style": "brief"}
+	if _, err := mcpClient.GetPrompt(ctx, promptReq); err != nil {
+		t.Fatalf("GetPrompt: %v", err)
+	}
+	for _, title := range []string{"one", "two"} {
+		callSpyTool(t, mcpClient, "add_todo", map[string]any{"title": title})
+	}
+
+	mock.waitForEvents(2, 3*time.Second)
+	settleForAbsentEvents()
+
+	events := mock.getEvents()
+	for _, e := range events {
+		if e.EventType == nil || *e.EventType != "mcp:tools/call" {
+			t.Errorf("unexpected event type %v — v2 publishes only tool calls", e.EventType)
+		}
+	}
+	if got := len(events); got != 2 {
+		t.Errorf("expected exactly 2 events for 2 tool calls, got %d (%v)", got, eventTypes(events))
+	}
+}
+
+// TestStdio_SuppliedSessionRoundTrips pins that a session_id supplied by the agent
+// survives a real stdio hop: every call carrying it is attributed to it, and
+// none of them re-mints.
+func TestStdio_SuppliedSessionRoundTrips(t *testing.T) {
+	mcpClient, mock := setupSpyStdio(t, nil)
+
+	session := sid("stdio_supplied")
+	for _, title := range []string{"first", "second"} {
+		result := callSpyTool(t, mcpClient, "add_todo", map[string]any{"title": title, "session_id": session})
+		for _, c := range result.Content {
+			if tc, ok := c.(mcp.TextContent); ok && strings.Contains(tc.Text, "session_id issued") {
+				t.Errorf("call %s re-minted a session the agent already supplied", title)
+			}
+		}
+	}
+
+	mock.waitForEvents(2, 3*time.Second)
+	events := filterEvents(mock.getEvents(), "mcp:tools/call")
+	if len(events) != 2 {
+		t.Fatalf("expected 2 tool-call events, got %d", len(events))
+	}
+	for i, evt := range events {
+		if evt.GetSessionId() != session {
+			t.Errorf("event %d attributed to %q, want %q", i, evt.GetSessionId(), session)
+		}
+		if evt.ClientName == nil || *evt.ClientName != "spy-stdio-client" {
+			t.Errorf("event %d lost the per-request client identity: %v", i, evt.ClientName)
+		}
+	}
+}
+
+// TestStdio_IdentityStampsEveryCallNoIdentifyEvents pins the v2 identify
+// contract over a real stdio transport: the callback runs on every tool call,
+// its result stamps that call's event, and no separate identify event is ever
+// published.
+func TestStdio_IdentityStampsEveryCallNoIdentifyEvents(t *testing.T) {
+	var identifyCount atomic.Int32
+	opts := DefaultOptions()
+	opts.Identify = func(ctx context.Context, request any) *agentcat.UserIdentity {
+		identifyCount.Add(1)
+		return &agentcat.UserIdentity{UserID: "stdio-actor", UserName: "Stdio Actor"}
+	}
+
+	mcpClient, mock := setupSpyStdio(t, opts)
+	for _, title := range []string{"first", "second"} {
+		callSpyTool(t, mcpClient, "add_todo", map[string]any{"title": title})
+	}
+
+	mock.waitForEvents(2, 3*time.Second)
+	settleForAbsentEvents()
+
+	events := filterEvents(mock.getEvents(), "mcp:tools/call")
+	if len(events) != 2 {
+		t.Fatalf("expected 2 tool-call events, got %d", len(events))
+	}
+	if got := identifyCount.Load(); got != 2 {
+		t.Errorf("Identify ran %d times, want once per tool call (2)", got)
+	}
+	for i, evt := range events {
+		if evt.IdentifyActorGivenId == nil || *evt.IdentifyActorGivenId != "stdio-actor" {
+			t.Errorf("event %d not stamped with the actor: %v", i, evt.IdentifyActorGivenId)
+		}
+	}
+	if identifies := filterEvents(mock.getEvents(), "agentcat:identify"); len(identifies) != 0 {
+		t.Errorf("v2 publishes no agentcat:identify events, got %d", len(identifies))
+	}
 }
 
 // TestStdio_FullPipeline verifies a basic tool call works end-to-end over a

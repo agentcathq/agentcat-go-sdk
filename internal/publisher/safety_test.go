@@ -11,7 +11,7 @@ import (
 	"testing"
 	"time"
 
-	"go.agentcat.com/sdk/internal/core"
+	"go.agentcat.com/sdk/v2/internal/core"
 )
 
 // TestWorker_SurvivesPanicWhileSending verifies the worker's top-level panic

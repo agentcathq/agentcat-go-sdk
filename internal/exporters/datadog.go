@@ -8,8 +8,8 @@ import (
 	"regexp"
 	"strings"
 
-	"go.agentcat.com/sdk/internal/core"
-	"go.agentcat.com/sdk/internal/logging"
+	"go.agentcat.com/sdk/v2/internal/core"
+	"go.agentcat.com/sdk/v2/internal/logging"
 )
 
 // DatadogExporter sends events to Datadog as logs (Logs API v2) and metrics

@@ -6,7 +6,7 @@ import (
 	"testing"
 	"time"
 
-	"go.agentcat.com/sdk/internal/publisher"
+	"go.agentcat.com/sdk/v2/internal/publisher"
 )
 
 // hostileErr has an unhashable dynamic type (slice field, value receiver);

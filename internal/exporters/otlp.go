@@ -9,8 +9,8 @@ import (
 	"strings"
 	"time"
 
-	"go.agentcat.com/sdk/internal/core"
-	"go.agentcat.com/sdk/internal/logging"
+	"go.agentcat.com/sdk/v2/internal/core"
+	"go.agentcat.com/sdk/v2/internal/logging"
 )
 
 // OTLPExporter sends events as OTLP/HTTP JSON trace spans to an

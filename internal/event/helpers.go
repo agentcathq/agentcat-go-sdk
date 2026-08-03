@@ -5,55 +5,12 @@ import (
 	"time"
 
 	"github.com/segmentio/ksuid"
-	agentcatapi "go.agentcat.com/api"
-	"go.agentcat.com/sdk/internal/core"
-	"go.agentcat.com/sdk/internal/exceptions"
+	"go.agentcat.com/sdk/v2/internal/core"
 )
 
 // NewEventID generates a new unique event ID with the AgentCat prefix.
 func NewEventID() string {
 	return fmt.Sprintf("%s_%s", core.PrefixEvent, ksuid.New().String())
-}
-
-// NewEvent creates an SDK-agnostic Event from session data and basic metadata.
-func NewEvent(session *core.Session, eventType string, duration *int32, isError bool, errorDetails error) *Event {
-	if session == nil {
-		return nil
-	}
-
-	eventID := NewEventID()
-
-	sessionID := ""
-	if session.SessionID != nil {
-		sessionID = *session.SessionID
-	}
-
-	projectID := ""
-	if session.ProjectID != nil {
-		projectID = *session.ProjectID
-	}
-
-	event := &Event{
-		PublishEventRequest: agentcatapi.PublishEventRequest{
-			Id:        &eventID,
-			ProjectId: projectID,
-			EventType: &eventType,
-			Duration:  duration,
-			Timestamp: core.Ptr(time.Now()),
-		},
-	}
-	event.SetSessionId(sessionID)
-
-	if isError {
-		event.IsError = &isError
-		if errorDetails != nil {
-			event.Error = exceptions.CaptureException(errorDetails)
-		}
-	}
-
-	CopySessionToEvent(session, event)
-
-	return event
 }
 
 // ConvertToMap converts any value (including structs, slices of structs) to
@@ -68,59 +25,6 @@ func ConvertToMap(v any) any {
 		return result
 	}
 	return v
-}
-
-// CopySessionToEvent copies session metadata fields to the event.
-func CopySessionToEvent(session *core.Session, event *Event) {
-	if session == nil || event == nil {
-		return
-	}
-
-	// Copy all session fields to the event
-	event.IpAddress = session.IpAddress
-	event.SdkLanguage = session.SdkLanguage
-	event.AgentcatVersion = session.AgentcatVersion
-	event.ServerName = session.ServerName
-	event.ServerVersion = session.ServerVersion
-	event.ClientName = session.ClientName
-	event.ClientVersion = session.ClientVersion
-	event.IdentifyActorGivenId = session.IdentifyActorGivenId
-	event.IdentifyActorName = session.IdentifyActorName
-	event.IdentifyData = session.IdentifyData
-}
-
-// CreateIdentifyEvent creates an Event for agentcat:identify event type.
-func CreateIdentifyEvent(session *core.Session) *Event {
-	if session == nil {
-		return nil
-	}
-
-	eventID := NewEventID()
-
-	sessionID := ""
-	if session.SessionID != nil {
-		sessionID = *session.SessionID
-	}
-
-	projectID := ""
-	if session.ProjectID != nil {
-		projectID = *session.ProjectID
-	}
-
-	eventType := "agentcat:identify"
-	event := &Event{
-		PublishEventRequest: agentcatapi.PublishEventRequest{
-			Id:        &eventID,
-			ProjectId: projectID,
-			EventType: &eventType,
-			Timestamp: core.Ptr(time.Now()),
-		},
-	}
-	event.SetSessionId(sessionID)
-
-	CopySessionToEvent(session, event)
-
-	return event
 }
 
 // LogEvent logs an event in a formatted, human-readable way for debugging.
