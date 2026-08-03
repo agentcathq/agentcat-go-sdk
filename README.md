@@ -45,10 +45,30 @@ Use AgentCat for:
 
 AgentCat provides first-class support for the two most popular Go MCP libraries:
 
-| Library | Minimum version | Install |
-|---------|-----------------|---------|
-| [mcp-go](https://github.com/mark3labs/mcp-go) (mark3labs) | v0.57.0 | `go get go.agentcat.com/sdk/mcpgo/v2` |
-| [go-sdk](https://github.com/modelcontextprotocol/go-sdk) (official) | v1.7.0 | `go get go.agentcat.com/sdk/officialsdk/v2` |
+| Library | Supported versions | Installs with | Install |
+|---------|--------------------|---------------|---------|
+| [mcp-go](https://github.com/mark3labs/mcp-go) (mark3labs) | v0.53.0 – v0.57.0 | v0.57.0 | `go get go.agentcat.com/sdk/mcpgo/v2` |
+| [go-sdk](https://github.com/modelcontextprotocol/go-sdk) (official) | v1.4.1 – v1.7.0 | v1.7.0 | `go get go.agentcat.com/sdk/officialsdk/v2` |
+
+A fresh install pulls the newest version, but AgentCat does not force you to
+upgrade: if your project pins an older release in the supported range, the
+adapter compiles and tracks against it. Every version in the range is tested
+with `-race` on each push by the compatibility workflows.
+
+Newer MCP releases carry features older ones cannot express, so a few
+capabilities depend on what your pinned version supports:
+
+| On an older version | mcp-go | go-sdk |
+|---------------------|--------|--------|
+| Integers above 2^53 keep their exact value in arguments and `structuredContent` | v0.56.0+ | always |
+| `agentcat_mrtr` tag on multi-round-trip calls | not in mcp-go | v1.7.0+ |
+| Per-request client identity from a 2026 client's `_meta` | all | all |
+
+Nothing else changes: session correlation, argument stripping, event capture,
+redaction, exporters and the `get_more_tools` tool behave identically across
+the whole range. Where a version cannot express a feature, AgentCat reports
+its absence rather than guessing — see `mcpgo/compat.go` and
+`officialsdk/compat.go`.
 
 Import the package that matches the MCP library you're already using. Both expose the same `Track()` API and share the same feature set. The adapter is the only import you need: it re-exports every type the public API mentions (`UserIdentity`, `Event`, `CustomEventData`, `ExporterConfig`, `AgentCatInstance`), so you never import the root `go.agentcat.com/sdk/v2` module yourself.
 

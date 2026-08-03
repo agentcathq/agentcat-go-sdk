@@ -276,7 +276,7 @@ func registerHandleFixtures(mcpServer *server.MCPServer) {
 			json.RawMessage(`{"type":"object"}`),
 		),
 		func(ctx context.Context, request mcp.CallToolRequest) (*mcp.CallToolResult, error) {
-			return mcp.NewToolResultText(string(request.Params.RawArguments)), nil
+			return mcp.NewToolResultText(string(echoRawArgs(request))), nil
 		},
 	)
 

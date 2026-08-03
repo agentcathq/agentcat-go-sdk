@@ -170,7 +170,7 @@ func newToolMiddleware(c *capturer) server.ToolHandlerMiddleware {
 			dispatchReq := request
 			if len(stripped) != len(rawArgs) {
 				dispatchReq.Params.Arguments = stripped
-				dispatchReq.Params.RawArguments = rebuildRawArguments(request.Params.RawArguments, stripped)
+				setRawArguments(&dispatchReq.Params, rebuildRawArguments(rawArgumentBytes(request), stripped))
 			}
 
 			start := time.Now()
@@ -201,10 +201,12 @@ func newToolMiddleware(c *capturer) server.ToolHandlerMiddleware {
 			//   err != nil          → here. handleToolCall turns it into a
 			//                         protocol error, so the after-hook never
 			//                         runs and OnError cannot see this state.
-			//   params.session set     → here. Session-augmented execution runs
-			//                         detached from the request handler, so no
-			//                         after-hook will ever report it; the
-			//                         after-hook stands down on the same field.
+			//   params.task set     → here. Task-augmented execution (mcp-go's
+			//                         detached long-running execution, NOT an
+			//                         AgentCat session) runs outside the request
+			//                         handler, so no after-hook will ever report
+			//                         it; the after-hook stands down on the same
+			//                         field.
 			//   nil result          → here, while the handles resolved above are
 			//                         still in hand: nothing can key a record.
 			//   otherwise           → the after-hook, the only seam that sees
@@ -322,7 +324,7 @@ func decorateResult(
 				sc[agentcat.MCPInstructionsKey] = mirror
 				cp.StructuredContent = sc
 				// The preserved wire bytes would otherwise win at marshal time.
-				cp.RawStructuredContent = nil
+				clearRawStructuredContent(&cp)
 			}
 		}
 	}
@@ -355,7 +357,7 @@ func undecorateResult(res *mcp.CallToolResult) *mcp.CallToolResult {
 	if droppedMirror {
 		cp.StructuredContent = structured
 		// The preserved wire bytes would otherwise win at marshal time.
-		cp.RawStructuredContent = nil
+		clearRawStructuredContent(&cp)
 	}
 	return &cp
 }
@@ -467,8 +469,8 @@ func withoutHandleMirror(res *mcp.CallToolResult) (map[string]any, bool) {
 // when a result was decoded from the wire, and it wins on re-marshal, so it is
 // preferred as the source when present.
 func structuredContentAsMap(res *mcp.CallToolResult) (map[string]any, bool) {
-	if len(res.RawStructuredContent) > 0 {
-		return decodeJSONObject(res.RawStructuredContent)
+	if raw := rawStructuredBytes(res); len(raw) > 0 {
+		return decodeJSONObject(raw)
 	}
 	switch v := res.StructuredContent.(type) {
 	case nil:

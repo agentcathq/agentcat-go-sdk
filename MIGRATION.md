@@ -128,8 +128,33 @@ Migrate this project from the Go module `github.com/mcpcat/mcpcat-go-sdk` to its
 ## v2.0.0 — Explicit session handles (MCP 2026-07-28)
 
 Import paths changed: `go.agentcat.com/sdk/v2`, `go.agentcat.com/sdk/mcpgo/v2`,
-`go.agentcat.com/sdk/officialsdk/v2`. Minimum MCP libraries:
-`modelcontextprotocol/go-sdk v1.7.0`, `mark3labs/mcp-go v0.57.0`.
+`go.agentcat.com/sdk/officialsdk/v2`.
+
+**You do not have to upgrade your MCP library to adopt v2.** Supported ranges
+are `modelcontextprotocol/go-sdk v1.4.1 – v1.7.0` and
+`mark3labs/mcp-go v0.53.0 – v0.57.0`; a fresh `go get` pulls the newest, but an
+existing pin anywhere in the range keeps working and is tested with `-race` in
+CI. The one exception is mcp-go **below v0.53.0**: v2 installs its tools/call
+middleware through `MCPServer.Use`, which mcp-go did not have until v0.47.0,
+and its test suite needs server options that landed in v0.53.0. If you are
+pinned below that, bump mcp-go when you move to v2.
+
+Two features depend on what your pinned version can express, and AgentCat
+reports their absence rather than guessing:
+
+- **Integers above 2^53** keep their exact value only on `mcp-go v0.56.0+`,
+  which is when the library began preserving the original JSON bytes
+  alongside the decoded value. Below that a large integer rounds through
+  `float64` before AgentCat sees it — the library's own behavior, unchanged by
+  AgentCat's argument stripping or handle mirror.
+- **The `agentcat_mrtr` tag** requires `go-sdk v1.7.0+`. Multi-round-trip did
+  not exist before MCP 2026-07-28, so on older versions there are no
+  intermediate rounds to tag. (mcp-go has no multi-round-trip support at all,
+  so the tag never appears on that adapter.)
+
+Everything else — session correlation, argument stripping, event capture,
+redaction, exporters, `get_more_tools` — behaves identically across the whole
+range.
 
 MCP 2026-07-28 removed protocol sessions, so AgentCat v2 replaces all
 transport-session correlation with explicit stateless handles:

@@ -1,4 +1,11 @@
+//go:build !gosdk_legacy
+
 package officialsdk
+
+// Multi-round-trip arrived in go-sdk v1.7.0 with the 2026-07-28 protocol.
+// These tests build mcp.InputRequestMap / mcp.InputResponseMap literals, which
+// no feature-detection shim can stand in for, so the gosdk_legacy tag excludes
+// the file when building against an older go-sdk. See compat.go.
 
 import (
 	"context"

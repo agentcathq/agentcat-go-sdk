@@ -25,7 +25,7 @@ func TestUnparseableInputSchemaIsAdvertisedUntouched(t *testing.T) {
 			json.RawMessage(`true`),
 		),
 		func(ctx context.Context, request mcp.CallToolRequest) (*mcp.CallToolResult, error) {
-			return mcp.NewToolResultText(string(request.Params.RawArguments)), nil
+			return mcp.NewToolResultText(string(echoRawArgs(request))), nil
 		},
 	)
 

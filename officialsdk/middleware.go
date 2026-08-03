@@ -145,7 +145,7 @@ func handleToolCall(
 			if opts.EnableAgentTracking {
 				agentID, _ = agentcat.ExtractHandle(rawArgs, agentcat.ParamAgentID)
 			}
-			if len(ctr.Params.InputResponses) > 0 {
+			if hasInputResponses(ctr.Params) {
 				mrtr = agentcat.MRTRContinuation
 			}
 		}()
@@ -178,7 +178,7 @@ func handleToolCall(
 
 	// MRTR intermediate round: tag, and never decorate — the completing
 	// round carries the mint-back.
-	inputRequired := toolResult != nil && toolResult.NeedsInput()
+	inputRequired := resultNeedsInput(toolResult)
 	if inputRequired {
 		mrtr = agentcat.MRTRInputRequired
 	}
@@ -350,16 +350,17 @@ func captureToolCallEvent(
 		ProjectID:       projectID,
 		SessionID:       resolution.SessionID,
 		SessionSource:   string(resolution.Source),
-		ProtocolVersion: ctr.ProtocolVersion(),
+		ProtocolVersion: protocolVersionOf(ctr),
 		AgentID:         agentID,
 		MRTR:            mrtr,
 		SDKLanguage:     "Go",
 		AgentcatVersion: agentcatVersion,
 	}
-	// Per-request client identity: the v1.7.0 accessor reads the reserved
-	// _meta keys first and falls back to the legacy initialize capture, so
-	// one code path covers 2026 and pre-2026 clients. Narrow defensively.
-	if info := ctr.ClientInfo(); info != nil {
+	// Per-request client identity: _meta reserved keys first, then the
+	// initialize capture, so one path covers 2026 and pre-2026 clients.
+	// go-sdk v1.7.0 runs that ladder itself; compat.go rebuilds it on older
+	// versions. Narrow defensively.
+	if info := clientInfoOf(ctr); info != nil {
 		ec.ClientName = info.Name
 		ec.ClientVersion = info.Version
 	}

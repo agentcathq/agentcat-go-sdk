@@ -93,6 +93,15 @@ func decodeEchoed(t *testing.T, result *mcp.CallToolResult) map[string]any {
 // half — the input half is covered by the mcpgo suite, whose library accepts
 // a raw input schema of any shape.
 func TestUnparseableSchemaIsAdvertisedUntouched(t *testing.T) {
+	// go-sdk only began accepting a boolean OUTPUT schema in v1.7.0; before
+	// that AddTool panics on it, so a tool with one cannot be registered and
+	// the scenario is unreachable. Probe rather than gate on a version: the
+	// question is whether the library accepts the fixture, not which release
+	// it is.
+	if !acceptsBooleanOutputSchema() {
+		t.Skip("go-sdk < v1.7.0 rejects a boolean output schema at AddTool")
+	}
+
 	server := mcp.NewServer(&mcp.Implementation{Name: "opaque-schema-server", Version: "1.0.0"}, nil)
 	server.AddTool(&mcp.Tool{
 		Name:         "opaque_output",
