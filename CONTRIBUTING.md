@@ -132,6 +132,40 @@ go build ./...
 - Provide context in error messages
 - Use `fmt.Errorf` with `%w` for error wrapping when appropriate
 
+## Releasing
+
+Three modules ship together and must carry the **same version**, because each
+adapter's `go.mod` requires the root module by that exact version. The
+`replace` directives make local builds ignore it, so a mismatch is invisible
+here and only breaks for someone installing from the proxy.
+
+1. Set the version everywhere it appears, before tagging:
+   - `mcpgo/go.mod` and `officialsdk/go.mod` — `require go.agentcat.com/sdk/v2 <version>`
+   - the five `examples/*/*/go.mod` — the adapter require plus the indirect root require
+   - install commands in `README.md` and `MIGRATION.md`
+2. Merge to `main`, then tag that commit three times — the root tag first, so
+   the adapters have something to resolve against:
+
+   ```bash
+   git tag v2.0.0-beta.1
+   git tag mcpgo/v2.0.0-beta.1
+   git tag officialsdk/v2.0.0-beta.1
+   git push origin v2.0.0-beta.1 mcpgo/v2.0.0-beta.1 officialsdk/v2.0.0-beta.1
+   ```
+
+3. Verify from a directory outside this repo, where the `replace` directives do
+   not apply — this is the only check that proves the published requires resolve:
+
+   ```bash
+   cd "$(mktemp -d)" && go mod init check
+   go get go.agentcat.com/sdk/mcpgo/v2@v2.0.0-beta.1
+   go get go.agentcat.com/sdk/officialsdk/v2@v2.0.0-beta.1
+   ```
+
+Prerelease versions are never selected by `@latest`, so a beta does not become
+the default install; ask for it explicitly. Tags are immutable on the module
+proxy — a bad tag needs a new version, not a force-push.
+
 ## Additional Resources
 
 For more detailed technical information about the project structure, internal architecture, and advanced development guidelines, see [AGENTS.md](AGENTS.md).

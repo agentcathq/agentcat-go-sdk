@@ -47,8 +47,10 @@ AgentCat provides first-class support for the two most popular Go MCP libraries:
 
 | Library | Supported versions | Installs with | Install |
 |---------|--------------------|---------------|---------|
-| [mcp-go](https://github.com/mark3labs/mcp-go) (mark3labs) | v0.53.0 – v0.57.0 | v0.57.0 | `go get go.agentcat.com/sdk/mcpgo/v2` |
-| [go-sdk](https://github.com/modelcontextprotocol/go-sdk) (official) | v1.4.1 – v1.7.0 | v1.7.0 | `go get go.agentcat.com/sdk/officialsdk/v2` |
+| [mcp-go](https://github.com/mark3labs/mcp-go) (mark3labs) | v0.53.0 – v0.57.0 | v0.57.0 | `go get go.agentcat.com/sdk/mcpgo/v2@v2.0.0-beta.1` |
+| [go-sdk](https://github.com/modelcontextprotocol/go-sdk) (official) | v1.4.1 – v1.7.0 | v1.7.0 | `go get go.agentcat.com/sdk/officialsdk/v2@v2.0.0-beta.1` |
+
+> **v2 is currently a prerelease.** Ask for the version explicitly: `go get` without one resolves `@latest`, which never selects a prerelease, so a bare `go get …/v2` finds nothing to install. v1 is unaffected and keeps resolving — the `/v2` suffix makes them separate module paths.
 
 A fresh install pulls the newest version, but AgentCat does not force you to
 upgrade: if your project pins an older release in the supported range, the
