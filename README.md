@@ -35,8 +35,8 @@ AgentCat helps developers and product owners build, improve, and monitor their M
 
 Use AgentCat for:
 
-- **Task replay** 🎬. Follow a whole agent task end to end — even across stateless deployments — to understand why agents are using your MCP servers, what functionality you're missing, and what clients they're coming from.
-- **Trace debugging** 🔍. See where your users are getting stuck, track and find when LLMs get confused by your API, and debug tasks across all deployments of your MCP server.
+- **Agent replay** 🎬. Follow a whole agent task in an MCP server end to end and understand why agents are using your MCP servers, what functionality you're missing, and what clients they're coming from.
+- **MCP debugging** 🔍. See where your users are getting stuck, track and find when LLMs get confused by your API, and debug tasks across all deployments of your MCP server.
 - **Existing platform support** 📊. Get logging and tracing out of the box for your existing observability platforms (OpenTelemetry, Datadog, Sentry) — eliminating the tedious work of implementing telemetry yourself.
 
 <img alt="AgentCat architecture — the AgentCat SDK inside your MCP server sends analytics to your observability vendors and task replay to the AgentCat dashboard" src="docs/static/architecture.png" />
@@ -47,32 +47,10 @@ AgentCat provides first-class support for the two most popular Go MCP libraries:
 
 | Library | Supported versions | Installs with | Install |
 |---------|--------------------|---------------|---------|
-| [mcp-go](https://github.com/mark3labs/mcp-go) (mark3labs) | v0.53.0 – v0.57.0 | v0.57.0 | `go get go.agentcat.com/sdk/mcpgo/v2@v2.0.0-beta.1` |
-| [go-sdk](https://github.com/modelcontextprotocol/go-sdk) (official) | v1.4.1 – v1.7.0 | v1.7.0 | `go get go.agentcat.com/sdk/officialsdk/v2@v2.0.0-beta.1` |
+| [mcp-go](https://github.com/mark3labs/mcp-go) (mark3labs) | > v0.53.0 | `go get go.agentcat.com/sdk/mcpgo/v2@v2.0.0-beta.1` |
+| [go-sdk](https://github.com/modelcontextprotocol/go-sdk) (official) | > v1.4.1 – v1.7.0 | `go get go.agentcat.com/sdk/officialsdk/v2@v2.0.0-beta.1` |
 
 > **v2 is currently a prerelease.** Ask for the version explicitly: `go get` without one resolves `@latest`, which never selects a prerelease, so a bare `go get …/v2` finds nothing to install. v1 is unaffected and keeps resolving — the `/v2` suffix makes them separate module paths.
-
-A fresh install pulls the newest version, but AgentCat does not force you to
-upgrade: if your project pins an older release in the supported range, the
-adapter compiles and tracks against it. Every version in the range is tested
-with `-race` on each push by the compatibility workflows.
-
-Newer MCP releases carry features older ones cannot express, so a few
-capabilities depend on what your pinned version supports:
-
-| On an older version | mcp-go | go-sdk |
-|---------------------|--------|--------|
-| Integers above 2^53 keep their exact value in arguments and `structuredContent` | v0.56.0+ | always |
-| `agentcat_mrtr` tag on multi-round-trip calls | not in mcp-go | v1.7.0+ |
-| Per-request client identity from a 2026 client's `_meta` | all | all |
-
-Nothing else changes: session correlation, argument stripping, event capture,
-redaction, exporters and the `get_more_tools` tool behave identically across
-the whole range. Where a version cannot express a feature, AgentCat reports
-its absence rather than guessing — see `mcpgo/compat.go` and
-`officialsdk/compat.go`.
-
-Import the package that matches the MCP library you're already using. Both expose the same `Track()` API and share the same feature set. The adapter is the only import you need: it re-exports every type the public API mentions (`UserIdentity`, `Event`, `CustomEventData`, `ExporterConfig`, `AgentCatInstance`), so you never import the root `go.agentcat.com/sdk/v2` module yourself.
 
 ## Getting Started
 
@@ -100,20 +78,17 @@ defer shutdown(context.Background())
 
 `Track()` returns a shutdown function — call it before your application exits to flush all queued events.
 
-## How AgentCat correlates calls
+## How it works
 
-MCP 2026-07-28 has no protocol sessions, and the deployment it assumes is stateless: a load balancer in front of many processes, a fresh server per request, nothing carried between calls. AgentCat v2 therefore correlates work with an **explicit handle that travels on the wire**:
+AgentCat works as a lightweight middleware inside your MCP server. When you call `track()`, it seamlessly modifies your registered tool schemas in place, following the MCP core team's [explicit handles (SEP-2567)](https://github.com/modelcontextprotocol/modelcontextprotocol/pull/2567) guidelines. Concretely, AgentCat adds the following to your server:
 
-- AgentCat adds an **optional `session_id` string parameter** to each advertised tool. It is never marked `required`, so a call that omits it always succeeds. A tool that already declares its own `session_id` keeps it: AgentCat skips **that one parameter**, still injecting the others, and logs an error explaining that calls to that tool will publish without a session. A tool whose input schema is a composed `oneOf`/`allOf`/`anyOf` gets no injected parameters at all.
-- On the first call of a task the agent has no `session_id` to send, so AgentCat mints one (`ses_…`) and tells the agent to echo it back, as a trailing `[MCP INSTRUCTIONS]` text block. That block is added **only** on the call that minted.
-- Tools that declare a plain-object output schema additionally get an `_mcp_instructions` field inside `structuredContent` on **every** response — carrying the minting instructions on the call that minted, and confirming the handles in force on every call after that.
-- Every later call carries that `session_id`. **AgentCat trusts only handles it issued** — a `ses_` prefix plus a 27-character KSUID. A value in the right shape is used verbatim, so any process in your fleet attributes the call to the same session. Anything else is rejected: the call publishes **without a session** and the agent is told to re-send the ID it was given, rather than being handed a new one. `Event.SessionId` is exempt from both redaction hooks, so a value AgentCat adopted there could never be scrubbed afterwards — which is why it adopts nothing it did not mint.
-- Before your handler runs, AgentCat **strips the parameters it injected** — `session_id`, `agent_id`, and `context` never reach your tool code. Stripping is driven by what was actually injected per tool, so a parameter of the same name that AgentCat did *not* inject (your own `context`, say) is passed through to you untouched.
-- The mint-back is **wire-only**. The event AgentCat publishes carries your customer's raw, unstripped request and your original, undecorated response.
+- **`session_id`** — a parameter injected into each tool's input schema. Agents echo it back on every call, letting AgentCat group related tool calls into one task even over stateless transports. Values are validated: anything AgentCat did not issue is rejected rather than adopted, and the agent is told to re-send the ID it was given.
+- **`agent_id`** _(beta, off by default)_ — enabled with `enableAgentTracking: true`. Each agent self-generates its own ID, keeping parallel agents working the same task individually attributable.
+- **`context`** — a parameter asking the agent to explain, in one sentence, why it is making this call. This is where intent data comes from.
+- **`get_more_tools`** — an additional tool, prompt-engineered so that agents readily report the features and tools they looked for but couldn't find — surfacing your missing functionality directly from real usage.
 
-The session ID rides in the existing `sessionId` event field, so dashboards, exporters, and the `RedactEvent` hook are unaffected. Every event carries an `agentcat_session_id_source` tag recording how its session was decided: `minted`, `supplied`, `hook`, `invalid` (a handle this server never issued) or `foreign` (a `session_id` parameter that belongs to your tool, not to AgentCat). The last two publish sessionless.
+Injected parameters are stripped from arguments before your tool handler runs, so your code never sees them. For tools that declare an output schema, issued IDs are also mirrored into `structuredContent` (as `_mcp_instructions`), so clients that only read structured results still receive them.
 
-**v2 publishes exactly two event types: `mcp:tools/call` and `agentcat:custom`.** `mcp:initialize`, `mcp:tools/list`, `agentcat:identify`, and all resource and prompt events are gone.
 
 ## Advanced Features
 
