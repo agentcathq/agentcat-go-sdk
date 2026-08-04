@@ -193,6 +193,13 @@ type AgentCatInstance struct {
 	ProjectID string
 	Options   *Options
 
+	// HookMode records whether this server runs in hook mode (the adapter's
+	// ResolveSessionID is configured): no session_id parameter is injected and
+	// no session instructions are shown. Set by the adapter at Track time.
+	// mcpgo's shared hook closures read it per request, because they carry no
+	// per-server state of their own.
+	HookMode bool
+
 	// Registries hold the injected-params and output-injection registries
 	// produced by the most recent tools/list (or rebuild) for this server.
 	// Nil until the first list; rebuilt on demand on the call path.

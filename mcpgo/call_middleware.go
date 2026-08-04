@@ -21,6 +21,13 @@ import (
 // (which sees every call that reaches a handler) and the failure hooks (which
 // see the calls mcp-go rejects before the handler, and so before the
 // middleware).
+//
+// Ownership contract: the server's own tool middleware is the capturer's ONLY
+// strong owner; the hook_state side map reaches it weakly. That is why the
+// strong server field below is safe — the capturer lives inside a
+// server-owned cycle, never pinned from a package-level root — and it is what
+// keeps a dead server's capturer (and anything a customer callback captured)
+// collectible even though the customer's shared Hooks value lives on.
 type capturer struct {
 	server          *server.MCPServer
 	projectID       string
@@ -58,15 +65,6 @@ func newCapturer(mcpServer *server.MCPServer, projectID string, opts *Options, p
 		serverVersion:   serverVersion,
 		agentcatVersion: agentcat.GetDependencyVersion(agentcat.SDKModulePath),
 	}
-}
-
-// servesRequest reports whether the in-flight request belongs to the server
-// this capturer was built for. A customer may pass one *server.Hooks value to
-// several servers (server.WithHooks), in which case every tracked server's
-// hooks fire for all of them; without this guard the wrong capturer would
-// publish a duplicate under its own project and server identity.
-func (c *capturer) servesRequest(ctx context.Context) bool {
-	return server.ServerFromContext(ctx) == c.server
 }
 
 // tracingEnabled reports whether events may be published for this server right

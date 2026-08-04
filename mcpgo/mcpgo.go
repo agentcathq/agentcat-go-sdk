@@ -268,9 +268,13 @@ func newShutdownFn() func(context.Context) error {
 // spy publisher so they exercise the same wiring Track installs.
 //
 // Hooks compose with whatever the customer registered at construction
-// (server.WithHooks): GetHooks returns that same struct and AgentCat's hooks
-// are appended to it. A server built without hooks has none, so a fresh struct
-// is installed in that case.
+// (server.WithHooks): GetHooks returns that same struct. AgentCat's hook
+// closures carry no per-server state — they resolve the live server from the
+// request context — so each Hooks value is instrumented exactly ONCE, no
+// matter how many servers the customer attaches it to. Appending per Track()
+// would grow the customer's hook slices forever in the per-request factory
+// topology, and closures capturing the server would pin every dead request's
+// server through the customer's long-lived Hooks value.
 func installTracking(
 	mcpServer *server.MCPServer,
 	instance *agentcat.AgentCatInstance,
@@ -283,11 +287,19 @@ func installTracking(
 		server.WithHooks(hooks)(mcpServer)
 	}
 
+	// What the context-dispatched hook closures resolve a live server to.
+	instance.HookMode = opts.ResolveSessionID != nil
 	capture := newCapturer(mcpServer, instance.ProjectID, opts, publishFn)
+	registerCapturer(mcpServer, capture)
 
-	registerListInjection(hooks, mcpServer, opts.ResolveSessionID != nil)
-	registerFailureHooks(hooks, capture)
+	instrumentHooksOnce(hooks, func() {
+		registerListInjection(hooks)
+		registerFailureHooks(hooks)
+	})
 	stashRebuild(instance, mcpServer)
+	// The tool middleware is the capturer's ONLY strong owner — the side map
+	// holds it weakly. Removing or gating this Use call would let GC take the
+	// capturer and silently kill this server's failure hooks.
 	mcpServer.Use(newToolMiddleware(capture))
 	registerGetMoreToolsIfEnabled(mcpServer, instance.Options)
 

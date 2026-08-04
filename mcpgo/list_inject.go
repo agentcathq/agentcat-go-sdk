@@ -127,8 +127,12 @@ func stashRebuild(instance *agentcat.AgentCatInstance, mcpServer *server.MCPServ
 }
 
 // registerListInjection wires the AfterListTools hook that runs the pure
-// pipeline and stores the registries on the instance.
-func registerListInjection(hooks *server.Hooks, mcpServer *server.MCPServer, hookMode bool) {
+// pipeline and stores the registries on the instance. Registered once per
+// Hooks value: the closure captures no server — the live server comes from
+// the request context and its configuration from the registry, so the same
+// closure serves every tracked server sharing these Hooks and stands down
+// for untracked ones.
+func registerListInjection(hooks *server.Hooks) {
 	hooks.AddAfterListTools(func(ctx context.Context, id any, message *mcp.ListToolsRequest, result *mcp.ListToolsResult) {
 		// Hooks run synchronously inside mcp-go's request handling, which has
 		// no panic recovery of its own: recover, log, and advertise the
@@ -138,18 +142,15 @@ func registerListInjection(hooks *server.Hooks, mcpServer *server.MCPServer, hoo
 				agentcat.LogRecoveredPanic("mcpgo list injection", r)
 			}
 		}()
-		// A customer may pass one *server.Hooks value to several servers
-		// (server.WithHooks), so this callback can fire for a server it was
-		// not registered for. hookMode and the instance below belong to
-		// mcpServer alone, so stand down for anyone else's request.
-		if server.ServerFromContext(ctx) != mcpServer {
+		srv := server.ServerFromContext(ctx)
+		if srv == nil {
 			return
 		}
-		instance := agentcat.GetInstance(mcpServer)
+		instance := agentcat.GetInstance(srv)
 		if instance == nil || instance.Options == nil || result == nil {
 			return
 		}
-		cfg := agentcat.BuildInjectConfig(instance.Options, hookMode)
+		cfg := agentcat.BuildInjectConfig(instance.Options, instance.HookMode)
 		normalized := normalizeMCPGoTools(result.Tools)
 		injected, reg := agentcat.BuildInjectedTools(cfg, normalized)
 		applyInjectedToolsMCPGo(result, injected)
@@ -165,7 +166,7 @@ func registerListInjection(hooks *server.Hooks, mcpServer *server.MCPServer, hoo
 		// their registered schemas here, before any call can arrive: an agent
 		// can only call a tool it has listed. Session-scoped tools are only
 		// reachable from here, where the session is in context.
-		declareRegisteredSchemas(mcpServer, cfg)
-		declareSessionSchemas(ctx, mcpServer, cfg)
+		declareRegisteredSchemas(srv, cfg)
+		declareSessionSchemas(ctx, srv, cfg)
 	})
 }

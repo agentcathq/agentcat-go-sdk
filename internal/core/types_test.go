@@ -133,6 +133,8 @@ func TestAgentCatInstanceHoldsNoServerReference(t *testing.T) {
 		case "ProjectID", "Options", "Registries", "RebuildTools":
 			// Known-safe: none of these can reach the server strongly
 			// (RebuildTools closes over it weakly).
+		case "HookMode":
+			// Known-safe: a bool cannot reach the server.
 		case "collisionsMu", "reportedCollisions":
 			// Known-safe: a mutex and a set of TOOL NAME strings. Strings
 			// cannot reach the server, so the cleanup still fires.
