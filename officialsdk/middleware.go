@@ -92,10 +92,13 @@ func handleToolCall(
 	toolName := ctr.Params.Name
 
 	// Raw arguments: recorded on the event exactly as the agent sent them.
+	// Numbers decode as json.Number, not float64: the stripped dispatch below
+	// re-marshals this map, and a float64 decode would silently corrupt
+	// customer integers above 2^53 in both the dispatch and the event.
 	rawArgs := map[string]any{}
 	if len(ctr.Params.Arguments) > 0 {
-		if err := json.Unmarshal(ctr.Params.Arguments, &rawArgs); err != nil {
-			rawArgs = map[string]any{}
+		if m, ok := decodeJSONObject(ctr.Params.Arguments); ok {
+			rawArgs = m
 		}
 	}
 
@@ -293,22 +296,28 @@ func structuredContentAsMap(sc any) (map[string]any, bool) {
 		return cp, true
 	default:
 		// json.RawMessage or an arbitrary marshalable value: the round trip
-		// doubles as the copy. Numbers decode as json.Number so they re-marshal
-		// as the customer's original literal — decoding them as float64 would
-		// change large integers (and break an "type":"integer" output schema).
-		// Non-objects (arrays, primitives, null) stay untouched.
+		// doubles as the copy. Non-objects (arrays, primitives, null) stay
+		// untouched.
 		raw, err := json.Marshal(sc)
 		if err != nil {
 			return nil, false
 		}
-		dec := json.NewDecoder(bytes.NewReader(raw))
-		dec.UseNumber()
-		var m map[string]any
-		if err := dec.Decode(&m); err != nil || m == nil {
-			return nil, false
-		}
-		return m, true
+		return decodeJSONObject(raw)
 	}
+}
+
+// decodeJSONObject decodes raw JSON into a map. Numbers decode as json.Number
+// so they re-marshal as the customer's original literal — decoding them as
+// float64 would change large integers (and break an "type":"integer" output
+// schema). Non-objects (arrays, primitives, null) are rejected untouched.
+func decodeJSONObject(raw []byte) (map[string]any, bool) {
+	dec := json.NewDecoder(bytes.NewReader(raw))
+	dec.UseNumber()
+	var m map[string]any
+	if err := dec.Decode(&m); err != nil || m == nil {
+		return nil, false
+	}
+	return m, true
 }
 
 // captureToolCallEvent builds and publishes the single mcp:tools/call event.

@@ -647,3 +647,159 @@ func TestDisableTracingNoMintBackNoEvents(t *testing.T) {
 		t.Errorf("expected 0 events with DisableTracing, got %d", len(events))
 	}
 }
+
+// ── integer precision through the strip path ─────────────────────────────────
+
+func TestStrippedDispatchPreservesIntegerPrecision(t *testing.T) {
+	mock := &mockPublisher{}
+	var dispatched *mcp.CallToolRequest
+	next := func(ctx context.Context, method string, req mcp.Request) (mcp.Result, error) {
+		switch method {
+		case "tools/list":
+			return &mcp.ListToolsResult{Tools: []*mcp.Tool{{
+				Name: "big_numbers",
+				InputSchema: map[string]any{
+					"type": "object",
+					"properties": map[string]any{
+						"exact": map[string]any{"type": "integer"},
+						"huge":  map[string]any{"type": "integer"},
+					},
+				},
+			}}}, nil
+		case "tools/call":
+			dispatched, _ = req.(*mcp.CallToolRequest)
+			return &mcp.CallToolResult{Content: []mcp.Content{&mcp.TextContent{Text: "ok"}}}, nil
+		}
+		return nil, nil
+	}
+	handler, _ := buildDirectCallHandler(t, nil, mock, next)
+
+	// 2^53+1 silently loses its last digit through a float64 round trip;
+	// 2^63 < huge < 2^64 turns into an unmarshal error for typed handlers.
+	req := &mcp.CallToolRequest{Params: &mcp.CallToolParamsRaw{
+		Name:      "big_numbers",
+		Arguments: json.RawMessage(`{"session_id":"` + sid("big") + `","context":"crunching","exact":9007199254740993,"huge":12345678901234567890}`),
+	}}
+	if _, err := handler(context.Background(), "tools/call", req); err != nil {
+		t.Fatalf("handler: %v", err)
+	}
+	if dispatched == nil {
+		t.Fatal("tools/call never reached the inner handler")
+	}
+
+	var fields map[string]json.RawMessage
+	if err := json.Unmarshal(dispatched.Params.Arguments, &fields); err != nil {
+		t.Fatalf("dispatched arguments: %v", err)
+	}
+	if _, has := fields["session_id"]; has {
+		t.Error("session_id must be stripped before dispatch")
+	}
+	if _, has := fields["context"]; has {
+		t.Error("context must be stripped before dispatch")
+	}
+	if got := string(fields["exact"]); got != "9007199254740993" {
+		t.Errorf("exact dispatched as %s, want 9007199254740993", got)
+	}
+	if got := string(fields["huge"]); got != "12345678901234567890" {
+		t.Errorf("huge dispatched as %s, want 12345678901234567890", got)
+	}
+	var typed struct {
+		Exact int64  `json:"exact"`
+		Huge  uint64 `json:"huge"`
+	}
+	if err := json.Unmarshal(dispatched.Params.Arguments, &typed); err != nil {
+		t.Fatalf("typed decode of dispatched arguments: %v", err)
+	}
+	if typed.Exact != 9007199254740993 || typed.Huge != 12345678901234567890 {
+		t.Errorf("typed values = %d/%d, want 9007199254740993/12345678901234567890", typed.Exact, typed.Huge)
+	}
+
+	// The published event's raw arguments keep the same precision.
+	evts := waitForEventType(mock, "mcp:tools/call", 1, 3*time.Second)
+	if len(evts) == 0 {
+		t.Fatal("no tool-call event published")
+	}
+	args, _ := evts[0].Parameters["arguments"].(map[string]any)
+	if n, ok := args["exact"].(json.Number); !ok || n.String() != "9007199254740993" {
+		t.Errorf("event exact = %v (%T), want json.Number 9007199254740993", args["exact"], args["exact"])
+	}
+	if n, ok := args["huge"].(json.Number); !ok || n.String() != "12345678901234567890" {
+		t.Errorf("event huge = %v (%T), want json.Number 12345678901234567890", args["huge"], args["huge"])
+	}
+}
+
+// TestHandlerRawArgumentsKeepIntegerPrecisionEndToEnd pins the raw bytes the
+// customer's handler receives after stripping. That is the surface the SDK
+// rebuilds — and the one a handler binding from raw arguments depends on. (The
+// go-sdk's own typed AddTool binding corrupts big integers through a float64
+// map with or without AgentCat; that upstream behavior is not pinned here.)
+func TestHandlerRawArgumentsKeepIntegerPrecisionEndToEnd(t *testing.T) {
+	type bigArgs struct {
+		Exact int64  `json:"exact"`
+		Huge  uint64 `json:"huge"`
+	}
+	var received bigArgs
+	var receivedRaw []byte
+	server := mcp.NewServer(&mcp.Implementation{Name: "precision-server", Version: "0.0.1"}, nil)
+	server.AddTool(&mcp.Tool{
+		Name:        "big_numbers",
+		Description: "Records the integers it receives",
+		InputSchema: map[string]any{
+			"type": "object",
+			"properties": map[string]any{
+				"exact": map[string]any{"type": "integer"},
+				"huge":  map[string]any{"type": "integer"},
+			},
+		},
+	}, func(ctx context.Context, req *mcp.CallToolRequest) (*mcp.CallToolResult, error) {
+		receivedRaw = append([]byte(nil), req.Params.Arguments...)
+		if err := json.Unmarshal(req.Params.Arguments, &received); err != nil {
+			return nil, err
+		}
+		return &mcp.CallToolResult{Content: []mcp.Content{&mcp.TextContent{Text: "ok"}}}, nil
+	})
+
+	mock := &mockPublisher{}
+	instance := &agentcat.AgentCatInstance{ProjectID: "proj_precision", Options: &agentcat.Options{}}
+	agentcat.RegisterServer(server, instance)
+	t.Cleanup(func() { agentcat.UnregisterServer(server) })
+	server.AddReceivingMiddleware(newTrackingMiddleware(server, "proj_precision", DefaultOptions(), mock.publish, nil))
+
+	cs := connectClient(t, server)
+	if _, err := cs.ListTools(context.Background(), &mcp.ListToolsParams{}); err != nil {
+		t.Fatalf("ListTools: %v", err)
+	}
+	res, err := cs.CallTool(context.Background(), &mcp.CallToolParams{
+		Name: "big_numbers",
+		Arguments: map[string]any{
+			"exact":   int64(9007199254740993),
+			"huge":    uint64(12345678901234567890),
+			"context": "testing precision",
+		},
+	})
+	if err != nil {
+		t.Fatalf("CallTool: %v", err)
+	}
+	if res.IsError {
+		t.Fatalf("call must succeed, got tool error: %v", res.Content)
+	}
+	var fields map[string]json.RawMessage
+	if err := json.Unmarshal(receivedRaw, &fields); err != nil {
+		t.Fatalf("handler raw arguments: %v", err)
+	}
+	if _, has := fields["context"]; has {
+		t.Error("context must be stripped before the handler")
+	}
+	if got := string(fields["exact"]); got != "9007199254740993" {
+		t.Errorf("handler raw exact = %s, want 9007199254740993", got)
+	}
+	if got := string(fields["huge"]); got != "12345678901234567890" {
+		t.Errorf("handler raw huge = %s, want 12345678901234567890", got)
+	}
+	if received.Exact != 9007199254740993 {
+		t.Errorf("handler bound exact = %d, want 9007199254740993", received.Exact)
+	}
+	if received.Huge != 12345678901234567890 {
+		t.Errorf("handler bound huge = %d, want 12345678901234567890", received.Huge)
+	}
+}
