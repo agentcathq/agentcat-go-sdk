@@ -41,7 +41,7 @@ func newTrackingMiddleware(
 	publishFn func(*agentcat.Event),
 	serverImpl *mcp.Implementation,
 ) mcp.Middleware {
-	agentcatVersion := agentcat.GetDependencyVersion("go.agentcat.com/sdk/v2")
+	agentcatVersion := agentcat.GetDependencyVersion(agentcat.SDKModulePath)
 
 	return func(next mcp.MethodHandler) mcp.MethodHandler {
 		stashRebuild(getMCPcat(serverRef), next)

@@ -56,7 +56,7 @@ func newCapturer(mcpServer *server.MCPServer, projectID string, opts *Options, p
 		publish:         publishFn,
 		serverName:      serverName,
 		serverVersion:   serverVersion,
-		agentcatVersion: agentcat.GetDependencyVersion("go.agentcat.com/sdk/v2"),
+		agentcatVersion: agentcat.GetDependencyVersion(agentcat.SDKModulePath),
 	}
 }
 

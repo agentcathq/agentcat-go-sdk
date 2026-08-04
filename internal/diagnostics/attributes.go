@@ -36,7 +36,7 @@ func buildStaticAttributes(projectID, integration, mcpSDKPath string) []otlpAttr
 	}
 
 	add("agentcat.sdk.language", "go")
-	add("agentcat.sdk.version", core.GetDependencyVersion(sdkModulePath))
+	add("agentcat.sdk.version", core.GetDependencyVersion(core.SDKModulePath))
 	add("agentcat.mcp_sdk.version", core.GetDependencyVersion(mcpSDKPath))
 	add("agentcat.integration", integration)
 
@@ -49,6 +49,24 @@ func buildStaticAttributes(projectID, integration, mcpSDKPath string) []otlpAttr
 	add("host.cpu.count", strconv.Itoa(runtime.NumCPU()))
 
 	add("deployment.environment", os.Getenv("ENVIRONMENT"))
+
+	return attrs
+}
+
+// buildRecordVersionAttrs builds the version attributes stamped on every
+// individual OTLP logRecord, mirroring the same keys in the resource block so
+// record-level-only backend views still see them. Empty values are omitted.
+func buildRecordVersionAttrs(sdkVersion, mcpVersion string) []otlpAttribute {
+	var attrs []otlpAttribute
+	add := func(key, value string) {
+		if value != "" {
+			attrs = append(attrs, otlpAttribute{Key: key, Value: otlpAttrValue{StringValue: value}})
+		}
+	}
+
+	add("agentcat.sdk.version", sdkVersion)
+	add("agentcat.mcp_sdk.version", mcpVersion)
+	add("process.runtime.version", runtime.Version())
 
 	return attrs
 }

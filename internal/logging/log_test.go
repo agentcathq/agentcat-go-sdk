@@ -19,6 +19,9 @@ func resetGlobalState() {
 	globalDebugMu.Lock()
 	globalDebug = false
 	globalDebugMu.Unlock()
+	versionSuffixMu.Lock()
+	versionSuffix = ""
+	versionSuffixMu.Unlock()
 }
 
 // TestNew_ReturnsSameInstance verifies that multiple calls to New() return the same logger instance

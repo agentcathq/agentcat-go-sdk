@@ -12,13 +12,14 @@ import (
 )
 
 var (
-	mu           sync.Mutex
-	initialized  bool
-	enabled      bool
-	buffer       []otlpLogRecord
-	staticAttrs  []otlpAttribute
-	flushPending bool
-	sdkVersion   string
+	mu                 sync.Mutex
+	initialized        bool
+	enabled            bool
+	buffer             []otlpLogRecord
+	staticAttrs        []otlpAttribute
+	recordVersionAttrs []otlpAttribute
+	flushPending       bool
+	sdkVersion         string
 
 	httpClient = &http.Client{Timeout: 5 * time.Second}
 )
@@ -51,10 +52,12 @@ func Init(projectID string, disabled bool, integration, mcpSDKPath string) {
 	}
 
 	attrs := buildStaticAttributes(projectID, integration, mcpSDKPath)
-	ver := core.GetDependencyVersion(sdkModulePath)
+	ver := core.GetDependencyVersion(core.SDKModulePath)
+	recAttrs := buildRecordVersionAttrs(ver, core.GetDependencyVersion(mcpSDKPath))
 
 	mu.Lock()
 	staticAttrs = attrs
+	recordVersionAttrs = recAttrs
 	sdkVersion = ver
 	mu.Unlock()
 
@@ -148,6 +151,7 @@ func ResetForTest() {
 	enabled = false
 	buffer = nil
 	staticAttrs = nil
+	recordVersionAttrs = nil
 	flushPending = false
 	sdkVersion = ""
 	mu.Unlock()

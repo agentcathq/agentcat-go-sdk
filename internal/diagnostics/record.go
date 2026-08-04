@@ -22,12 +22,18 @@ func severityFor(level logging.Level) (int, string) {
 
 func buildRecord(level logging.Level, msg string) otlpLogRecord {
 	num, text := severityFor(level)
+	mu.Lock()
+	attrs := recordVersionAttrs
+	mu.Unlock()
+	if attrs == nil {
+		attrs = []otlpAttribute{}
+	}
 	return otlpLogRecord{
 		TimeUnixNano:   strconv.FormatInt(time.Now().UnixNano(), 10),
 		SeverityNumber: num,
 		SeverityText:   text,
 		Body:           otlpBody{StringValue: msg},
-		Attributes:     []otlpAttribute{},
+		Attributes:     attrs,
 	}
 }
 

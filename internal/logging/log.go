@@ -24,6 +24,9 @@ const (
 var (
 	diagSink   func(Level, string)
 	diagSinkMu sync.RWMutex
+
+	versionSuffix   string
+	versionSuffixMu sync.RWMutex
 )
 
 // SetDiagnosticsSink registers a callback that receives every Info/Warn/Error/Debug
@@ -32,6 +35,19 @@ func SetDiagnosticsSink(fn func(Level, string)) {
 	diagSinkMu.Lock()
 	defer diagSinkMu.Unlock()
 	diagSink = fn
+}
+
+// SetVersionSuffix installs the version suffix appended to every file log line
+// (e.g. " | sdk=v2.0.0 go=go1.25.5 mcp=v0.57.0"). First-wins: later calls are
+// ignored, matching diagnostics.Init's idempotence. The suffix is file-only —
+// the diagnostics sink receives the bare message, because the OTLP side carries
+// the same versions as structured attributes instead.
+func SetVersionSuffix(s string) {
+	versionSuffixMu.Lock()
+	defer versionSuffixMu.Unlock()
+	if versionSuffix == "" {
+		versionSuffix = s
+	}
 }
 
 // emit tees the entry to the diagnostics sink (outside l.mu, never breaks logging)
@@ -46,9 +62,12 @@ func (l *Logger) emit(level Level, prefix, msg string) {
 			sink(level, msg)
 		}()
 	}
+	versionSuffixMu.RLock()
+	suffix := versionSuffix
+	versionSuffixMu.RUnlock()
 	l.mu.Lock()
 	defer l.mu.Unlock()
-	l.logger.Printf("%s: %s", prefix, msg)
+	l.logger.Printf("%s: %s%s", prefix, msg, suffix)
 }
 
 // Logger provides logging functionality for AgentCat
@@ -94,7 +113,8 @@ func New() *Logger {
 }
 
 // ResetForTesting closes the current logger and resets the singleton
-// so the next New() call creates a fresh instance.
+// so the next New() call creates a fresh instance. Also clears the
+// version suffix so SetVersionSuffix's first-wins latch reopens.
 func ResetForTesting() {
 	loggerMu.Lock()
 	defer loggerMu.Unlock()
@@ -102,6 +122,10 @@ func ResetForTesting() {
 		defaultLogger.Close()
 	}
 	defaultLogger = nil
+
+	versionSuffixMu.Lock()
+	versionSuffix = ""
+	versionSuffixMu.Unlock()
 }
 
 func newLogger() *Logger {

@@ -81,6 +81,11 @@ func TestTrack_FailedSetupWritesDebugLog(t *testing.T) {
 		"AgentCat setup started",
 		"integration officialsdk",
 		"AgentCat setup failed",
+		// Version suffix labels on every line. Values resolve to "dev" here:
+		// test binaries carry no dependency stamps in their build info.
+		" | sdk=",
+		" go=go1.",
+		" mcp=",
 	} {
 		if !strings.Contains(string(body), want) {
 			t.Errorf("agentcat.log missing %q; log:\n%s", want, body)

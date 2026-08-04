@@ -33,6 +33,13 @@ func TestInitDiagnostics_EmitsStartBeacon(t *testing.T) {
 		!strings.Contains(out, "integration officialsdk") {
 		t.Fatalf("start beacon missing/incomplete: %q", out)
 	}
+	// Version suffix labels — values vary by build (module resolves to "dev"
+	// when it is the main module or under a replace directive).
+	if !strings.Contains(out, " | sdk=") ||
+		!strings.Contains(out, " go=go1.") ||
+		!strings.Contains(out, " mcp=") {
+		t.Fatalf("start beacon missing version suffix: %q", out)
+	}
 }
 
 func TestInitDiagnostics_TelemetryOnlyLabel(t *testing.T) {
