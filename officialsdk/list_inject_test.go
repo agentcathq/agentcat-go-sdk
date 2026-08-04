@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"reflect"
+	"runtime"
 	"testing"
 
 	"github.com/modelcontextprotocol/go-sdk/mcp"
@@ -333,7 +334,8 @@ func TestStashRebuildFetchesOriginalList(t *testing.T) {
 	}
 
 	instance := &agentcat.AgentCatInstance{Options: &agentcat.Options{}}
-	stashRebuild(instance, next)
+	target := &rebuildTarget{next: next}
+	stashRebuild(instance, target)
 	if instance.RebuildTools == nil {
 		t.Fatal("RebuildTools not stashed on instance")
 	}
@@ -342,6 +344,9 @@ func TestStashRebuildFetchesOriginalList(t *testing.T) {
 	if err != nil {
 		t.Fatalf("RebuildTools: %v", err)
 	}
+	// The stash holds the target only weakly; this test stands in for the
+	// middleware handler that normally keeps it alive.
+	runtime.KeepAlive(target)
 	if gotMethod != "tools/list" {
 		t.Errorf("expected tools/list against inner handler, got %q", gotMethod)
 	}

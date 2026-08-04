@@ -44,8 +44,16 @@ func newTrackingMiddleware(
 	agentcatVersion := agentcat.GetDependencyVersion(agentcat.SDKModulePath)
 
 	return func(next mcp.MethodHandler) mcp.MethodHandler {
-		stashRebuild(getMCPcat(serverRef), next)
+		target := &rebuildTarget{next: next}
+		stashRebuild(getMCPcat(serverRef), target)
 		return func(ctx context.Context, method string, req mcp.Request) (mcp.Result, error) {
+			// Read the chain through the holder on EVERY dispatch: this
+			// closure's reference to target is what keeps the holder alive
+			// exactly as long as the server holds this handler. Referencing
+			// the outer next here instead would leave target uncaptured and
+			// collected immediately, and rebuild-on-demand would permanently
+			// stand down on a live server.
+			next := target.next
 			switch method {
 			case "tools/list":
 				result, err := next(ctx, method, req)

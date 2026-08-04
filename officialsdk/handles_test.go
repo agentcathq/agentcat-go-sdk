@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"runtime"
 	"strings"
 	"testing"
 	"time"
@@ -801,5 +802,57 @@ func TestHandlerRawArgumentsKeepIntegerPrecisionEndToEnd(t *testing.T) {
 	}
 	if received.Huge != 12345678901234567890 {
 		t.Errorf("handler bound huge = %d, want 12345678901234567890", received.Huge)
+	}
+}
+
+// TestRebuildSurvivesGCWhileHandlerLive is the anti-elision pin for the weak
+// rebuild holder: as long as the composed middleware handler is alive, the
+// holder must be too — a future edit that stops routing dispatch through the
+// holder would let GC collect it under a live server and silently kill
+// rebuild-on-demand (this test's registries would stay nil).
+func TestRebuildSurvivesGCWhileHandlerLive(t *testing.T) {
+	mock := &mockPublisher{}
+	var dispatched *mcp.CallToolRequest
+	next := func(ctx context.Context, method string, req mcp.Request) (mcp.Result, error) {
+		switch method {
+		case "tools/list":
+			return &mcp.ListToolsResult{Tools: []*mcp.Tool{{
+				Name: "gc_tool",
+				InputSchema: map[string]any{
+					"type":       "object",
+					"properties": map[string]any{"payload": map[string]any{"type": "string"}},
+				},
+			}}}, nil
+		case "tools/call":
+			dispatched, _ = req.(*mcp.CallToolRequest)
+			return &mcp.CallToolResult{Content: []mcp.Content{&mcp.TextContent{Text: "ok"}}}, nil
+		}
+		return nil, nil
+	}
+	handler, instance := buildDirectCallHandler(t, nil, mock, next)
+
+	for range 5 {
+		runtime.GC()
+	}
+
+	req := &mcp.CallToolRequest{Params: &mcp.CallToolParamsRaw{
+		Name:      "gc_tool",
+		Arguments: json.RawMessage(`{"context":"gc probe","payload":"keep"}`),
+	}}
+	if _, err := handler(context.Background(), "tools/call", req); err != nil {
+		t.Fatalf("handler: %v", err)
+	}
+	if instance.Registries.Load() == nil {
+		t.Fatal("rebuild-on-demand must still work after GC while the handler is live")
+	}
+	var got map[string]any
+	if err := json.Unmarshal(dispatched.Params.Arguments, &got); err != nil {
+		t.Fatalf("dispatched arguments: %v", err)
+	}
+	if _, has := got["context"]; has {
+		t.Error("context must be stripped: the rebuilt registries were not applied")
+	}
+	if got["payload"] != "keep" {
+		t.Errorf("customer argument lost: %v", got)
 	}
 }

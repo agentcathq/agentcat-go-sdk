@@ -3,6 +3,7 @@ package officialsdk
 import (
 	"context"
 	"encoding/json"
+	"weak"
 
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 
@@ -100,17 +101,35 @@ func handleToolsList(result mcp.Result, instance *agentcat.AgentCatInstance, cfg
 	agentcat.ReportSessionParamCollisions(instance, reg)
 }
 
-// stashRebuild wires the instance's rebuild function to the inner (already
-// composed) next handler, so a tools/call landing on a fresh instance can
-// re-derive registries by fetching the ORIGINAL uninjected list.
-func stashRebuild(instance *agentcat.AgentCatInstance, next mcp.MethodHandler) {
-	if instance == nil {
+// rebuildTarget owns the composed inner handler chain for exactly the
+// server's lifetime: the per-server middleware handler references it strongly
+// (every dispatch reads target.next), and RebuildTools references it only
+// weakly. The global registry holds every instance strongly, so a strong
+// RebuildTools→next reference would keep alive whatever the chain's closures
+// capture — customer middleware routinely captures the server, which in the
+// per-request factory topology pinned one server per request forever. A
+// collected server takes the holder — and everything those closures capture —
+// down with it, mirroring the weak server in mcpgo's stashRebuild.
+type rebuildTarget struct {
+	next mcp.MethodHandler
+}
+
+// stashRebuild wires the instance's rebuild function to the holder of the
+// inner (already composed) next handler, so a tools/call landing on a fresh
+// instance can re-derive registries by fetching the ORIGINAL uninjected list.
+func stashRebuild(instance *agentcat.AgentCatInstance, target *rebuildTarget) {
+	if instance == nil || target == nil {
 		return
 	}
+	weakTarget := weak.Make(target)
 	instance.RebuildTools = func(ctx context.Context, session any) ([]agentcat.NormalizedTool, error) {
+		live := weakTarget.Value()
+		if live == nil {
+			return nil, nil // chain (and server) collected: stand down
+		}
 		ss, _ := session.(*mcp.ServerSession)
 		req := &mcp.ListToolsRequest{Session: ss, Params: &mcp.ListToolsParams{}}
-		res, err := next(ctx, "tools/list", req)
+		res, err := live.next(ctx, "tools/list", req)
 		if err != nil {
 			return nil, err
 		}
