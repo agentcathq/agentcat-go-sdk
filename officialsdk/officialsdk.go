@@ -183,6 +183,14 @@ func Track(mcpServer *mcp.Server, projectID string, opts *Options) (func(context
 		opts = DefaultOptions()
 	}
 
+	// The log singleton is created by the first emitted line with the debug
+	// flag as it stands at that moment, and InitDiagnostics below emits the
+	// first line. Enable-only: a failing or repeat Track must never disable
+	// logging that another Track enabled.
+	if opts.Debug {
+		agentcat.SetDebug(true)
+	}
+
 	agentcat.InitDiagnostics(projectID, opts.DisableDiagnostics, "officialsdk",
 		"github.com/modelcontextprotocol/go-sdk")
 
