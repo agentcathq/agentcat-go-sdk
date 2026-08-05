@@ -86,5 +86,4 @@ temp/
 
 # Planning and design working notes: local scratch, never committed.
 # docs/ itself stays tracked (cats, static assets).
-docs/superpowers/plans/
-docs/superpowers/specs/
+docs/superpowers/
