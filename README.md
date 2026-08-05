@@ -23,153 +23,111 @@
   <a href="https://github.com/agentcathq/agentcat-go-sdk/actions"><img src="https://github.com/agentcathq/agentcat-go-sdk/workflows/CI/badge.svg" alt="CI"></a>
 </p>
 
-> [!IMPORTANT]
-> **AgentCat v2 is out.** MCP 2026-07-28 removed protocol-level sessions, so v2 replaces all transport-session correlation with explicit, stateless session handles and moves to `/v2` import paths. Coming from v1 or from `github.com/mcpcat/mcpcat-go-sdk`? Read the [migration guide](./MIGRATION.md) — it lists every removed API.
-
 > [!NOTE]
-> Looking for the Python SDK? Check it out here [agentcat-python](https://github.com/agentcathq/agentcat-python-sdk).
+> AgentCat v2 introduces compatibility with the [MCP Protocol "Stateless" 2026-07-28 Update](https://blog.modelcontextprotocol.io/posts/2026-07-28/) and the coinciding [mcp-go](https://github.com/mark3labs/mcp-go) and official [go-sdk](https://github.com/modelcontextprotocol/go-sdk) releases that put it into effect. The stateless transition has a massive impact on analytics, as sessions were a built-in concept tying related tool calls together. AgentCat has now migrated its session tracking under guidance of the MCP core team's recommendations of using [explicit handles (SEP-2567)](https://github.com/modelcontextprotocol/modelcontextprotocol/pull/2567).
+>
+> As a result AgentCat now injects a `session_id` on every MCP tool call to associate them under the same task umbrella. Our evals show much higher tool correlation accuracy at the cost of < 1% additional context pollution.
+
+> [!IMPORTANT]
+> **MCPcat is now AgentCat** 🐱 — same team, same product, new name. This module was previously published as [`mcpcat-go-sdk`](https://github.com/mcpcat/mcpcat-go-sdk), which keeps working forever, but new features land here. Upgrading takes a few minutes — see the [migration guide](./MIGRATION.md).
+
+AgentCat is an analytics platform for MCP server owners 🐱. It captures user intentions and behavior patterns to help you understand what AI users actually need from your tools — eliminating guesswork and accelerating product development all with one-line of code.
+
+This SDK also provides a free and simple way to forward telemetry like logs, traces, and errors to any Open Telemetry collector or popular tools like Datadog, Sentry, and PostHog.
+
+```bash
+# mark3labs/mcp-go (v0.53.0 – v0.57.0)
+go get go.agentcat.com/sdk/mcpgo/v2
+
+# official modelcontextprotocol/go-sdk (v1.4.1 – v1.7.0)
+go get go.agentcat.com/sdk/officialsdk/v2
+```
+
+To learn more about us, check us out [here](https://agentcat.com). For detailed guides visit our [documentation](https://docs.agentcat.com).
 
 ## Why use AgentCat? 🤔
 
-AgentCat helps developers and product owners build, improve, and monitor their MCP servers by capturing user analytics and tracing tool calls.
+AgentCat helps builders of MCP servers, Claude Connectors, and ChatGPT Plugins learn how to improve them by capturing any agents goals and detecting when they get stuck.
 
 Use AgentCat for:
 
-- **Agent replay** 🎬. Follow a whole agent task in an MCP server end to end and understand why agents are using your MCP servers, what functionality you're missing, and what clients they're coming from.
-- **MCP debugging** 🔍. See where your users are getting stuck, track and find when LLMs get confused by your API, and debug tasks across all deployments of your MCP server.
+- **Agent session replay** 🎬. Follow alongside your users and their agents to understand why they're using your MCP servers, what functionality you're missing, and what clients they're coming from.
+- **Trace debugging** 🔍. See where your users are getting stuck, track and find when LLMs get confused by your API, and debug sessions across all deployments of your MCP server.
 - **Existing platform support** 📊. Get logging and tracing out of the box for your existing observability platforms (OpenTelemetry, Datadog, Sentry) — eliminating the tedious work of implementing telemetry yourself.
 
-<img alt="AgentCat architecture — the AgentCat SDK inside your MCP server sends analytics to your observability vendors and task replay to the AgentCat dashboard" src="docs/static/architecture.png" />
-
-## Supported MCP Libraries
-
-AgentCat provides first-class support for the two most popular Go MCP libraries:
-
-| Library | Supported versions | Installs with | Install |
-|---------|--------------------|---------------|---------|
-| [mcp-go](https://github.com/mark3labs/mcp-go) (mark3labs) | > v0.53.0 | `go get go.agentcat.com/sdk/mcpgo/v2@v2.0.0-beta.1` |
-| [go-sdk](https://github.com/modelcontextprotocol/go-sdk) (official) | > v1.4.1 – v1.7.0 | `go get go.agentcat.com/sdk/officialsdk/v2@v2.0.0-beta.1` |
-
-> **v2 is currently a prerelease.** Ask for the version explicitly: `go get` without one resolves `@latest`, which never selects a prerelease, so a bare `go get …/v2` finds nothing to install. v1 is unaffected and keeps resolving — the `/v2` suffix makes them separate module paths.
-
-## Getting Started
-
-Create an account and obtain your project ID at [agentcat.com](https://agentcat.com). For detailed setup instructions visit our [documentation](https://docs.agentcat.com).
-
-Add one `Track()` call before starting your server:
-
-**mark3labs/mcp-go:**
-```go
-import agentcat "go.agentcat.com/sdk/mcpgo/v2"
-
-shutdown, err := agentcat.Track(mcpServer, "proj_YOUR_PROJECT_ID", nil)
-if err != nil { log.Fatal(err) } // on error shutdown is nil — do not defer it
-defer shutdown(context.Background())
-```
-
-**Official go-sdk:**
-```go
-import agentcat "go.agentcat.com/sdk/officialsdk/v2"
-
-shutdown, err := agentcat.Track(mcpServer, "proj_YOUR_PROJECT_ID", nil)
-if err != nil { log.Fatal(err) } // on error shutdown is nil — do not defer it
-defer shutdown(context.Background())
-```
-
-`Track()` returns a shutdown function — call it before your application exits to flush all queued events.
+<img alt="AgentCat architecture — the AgentCat SDK inside your MCP server sends analytics to your observability vendors and session replay to the AgentCat dashboard" src="docs/static/architecture.png" />
 
 ## How it works
 
-AgentCat works as a lightweight middleware inside your MCP server. When you call `track()`, it seamlessly modifies your registered tool schemas in place, following the MCP core team's [explicit handles (SEP-2567)](https://github.com/modelcontextprotocol/modelcontextprotocol/pull/2567) guidelines. Concretely, AgentCat adds the following to your server:
+AgentCat works as a lightweight middleware inside your MCP server. When you call `Track()`, it seamlessly modifies your registered tool schemas in place, following the MCP core team's [explicit handles (SEP-2567)](https://github.com/modelcontextprotocol/modelcontextprotocol/pull/2567) guidelines. Concretely, AgentCat adds the following to your server:
 
 - **`session_id`** — a parameter injected into each tool's input schema. Agents echo it back on every call, letting AgentCat group related tool calls into one task even over stateless transports. Values are validated: anything AgentCat did not issue is rejected rather than adopted, and the agent is told to re-send the ID it was given.
-- **`agent_id`** _(beta, off by default)_ — enabled with `enableAgentTracking: true`. Each agent self-generates its own ID, keeping parallel agents working the same task individually attributable.
+- **`agent_id`** _(off by default)_ — enabled with `EnableAgentTracking: true`. Each agent self-generates its own ID, keeping parallel agents working the same task individually attributable.
 - **`context`** — a parameter asking the agent to explain, in one sentence, why it is making this call. This is where intent data comes from.
 - **`get_more_tools`** — an additional tool, prompt-engineered so that agents readily report the features and tools they looked for but couldn't find — surfacing your missing functionality directly from real usage.
 
 Injected parameters are stripped from arguments before your tool handler runs, so your code never sees them. For tools that declare an output schema, issued IDs are also mirrored into `structuredContent` (as `_mcp_instructions`), so clients that only read structured results still receive them.
 
+## Getting Started
 
-## Advanced Features
+To get started with AgentCat, first create an account and obtain your project ID by signing up at [agentcat.com](https://agentcat.com). For detailed setup instructions visit our [documentation](https://docs.agentcat.com).
 
-### Agent tracking
-
-Set `EnableAgentTracking` (off by default) to also inject an **`agent_id`** parameter, so parallel agents and subagents working the same task can be told apart. Where it is injected it is marked `required` in the advertised schema (unlike `session_id`) and the agent chooses its own value — but an omitted `agent_id` still never rejects the call; the event simply publishes without agent identity. The value is carried on the event as a tag.
-
-Injection is best-effort per tool, exactly like `session_id` and `context`: a tool that already declares its own `agent_id` keeps it, and a tool whose input schema is composed (`oneOf`/`allOf`/`anyOf`) or unreadable is left alone.
-
-```go
-shutdown, err := agentcat.Track(s, "proj_YOUR_PROJECT_ID", &agentcat.Options{
-    EnableAgentTracking: true,
-})
-```
-
-### Hook mode: bring your own correlation ID
-
-If you already have a correlation ID — a workflow ID, a trace ID, a thread ID — configure `ResolveSessionID` and AgentCat switches to **hook mode**: it injects **no `session_id` parameter anywhere** and never shows session instructions to the agent. You own correlation. The string you return is deterministically derived (together with your project ID) into a `ses_` session ID, so the same value always maps to the same session across processes, restarts, and languages. Return `""` or an error to silently mint a random session for that one call.
-
-The hook runs on every tool call — keep it cheap.
+Once you have your project ID, integrate AgentCat into your MCP server:
 
 **mark3labs/mcp-go:**
-```go
-import (
-    "github.com/mark3labs/mcp-go/mcp"
-    agentcat "go.agentcat.com/sdk/mcpgo/v2"
-)
 
-shutdown, err := agentcat.Track(s, "proj_YOUR_PROJECT_ID", &agentcat.Options{
-    ResolveSessionID: func(ctx context.Context, request mcp.CallToolRequest) (string, error) {
-        return workflowIDFromContext(ctx), nil
-    },
-})
+```go
+import agentcat "go.agentcat.com/sdk/mcpgo/v2"
+
+// Track the server with AgentCat
+shutdown, err := agentcat.Track(mcpServer, "proj_0000000", nil)
+if err != nil { log.Fatal(err) } // on error shutdown is nil — do not defer it
+defer shutdown(context.Background()) // flushes queued events before exit
 ```
 
 **Official go-sdk:**
-```go
-import (
-    "github.com/modelcontextprotocol/go-sdk/mcp"
-    agentcat "go.agentcat.com/sdk/officialsdk/v2"
-)
 
-shutdown, err := agentcat.Track(s, "proj_YOUR_PROJECT_ID", &agentcat.Options{
-    ResolveSessionID: func(ctx context.Context, request mcp.Request) (string, error) {
-        return workflowIDFromContext(ctx), nil
-    },
-})
+```go
+import agentcat "go.agentcat.com/sdk/officialsdk/v2"
+
+// Track the server with AgentCat
+shutdown, err := agentcat.Track(mcpServer, "proj_0000000", nil)
+if err != nil { log.Fatal(err) } // on error shutdown is nil — do not defer it
+defer shutdown(context.Background()) // flushes queued events before exit
 ```
 
-### Stateless deployments and per-request server factories
-
-Building a fresh server for every HTTP request is the expected 2026 topology, and it is fully supported: **call `Track()` inside the factory.**
+Stateless servers built on [MCP 2026-07-28](https://blog.modelcontextprotocol.io/posts/2026-07-28/) create a fresh server instance per request (`mcp.NewStreamableHTTPHandler`) or per connection. Call `Track()` inside the factory so every instance is tracked:
 
 ```go
+// A complete runnable program is in examples/officialsdk/factory.
 handler := mcp.NewStreamableHTTPHandler(func(r *http.Request) *mcp.Server {
     s := newServer()
-    if _, err := agentcat.Track(s, "proj_YOUR_PROJECT_ID", nil); err != nil {
+    if _, err := agentcat.Track(s, "proj_0000000", nil); err != nil {
         log.Printf("agentcat: %v", err) // never fail a request over analytics
     }
-    return s
+    return s // skip the per-server shutdown here; drain once at exit with agentcat.Shutdown(ctx)
 }, &mcp.StreamableHTTPOptions{Stateless: true})
 ```
 
-- Module-level state (the publisher, the logger, diagnostics) initializes **once**, however many servers you track. Per-server state is released automatically when the server becomes unreachable, so a per-request factory does not leak.
-- Ignore the shutdown function `Track()` returns inside the factory; the publisher is process-wide, so drain it once at exit with `agentcat.Shutdown(ctx)`.
-- **Rebuild on demand**: a stateless client can send `tools/call` to a process that never served a `tools/list`. AgentCat rebuilds its injection registries from that server's own tool list on the first call, so arguments are still stripped and the mint-back still reaches the agent.
+Calling `Track()` per instance is cheap — the event queue, telemetry exporters, and diagnostics are initialized once and shared across instances.
 
-A complete runnable program is in [`examples/officialsdk/factory`](examples/officialsdk/factory).
+### Identifying users
 
-### User Identification
+We strongly encourage identifying every actor. If you can't resolve a real user, return a stable anonymized ID instead — for example, a hash of the auth token or API key — so that all events from the same end user still roll up to one actor in your dashboard rather than scattering into anonymous one-off sessions.
 
-Attach user information to a call's event with the `Identify` callback. In v2 it runs **on every tool call**, uncached, and stamps only that one event — there is no session to merge into and no `agentcat:identify` event. Because it is on the hot path of every call, keep it cheap: read from the context, headers, or an already-parsed token, and make **no network calls**. Return `nil` (or an identity with an empty `UserID`) to skip identification for a call.
+`Identify` runs on every tool call, uncached, and stamps only that one event. Because it is on the hot path of every call, keep it cheap: read from the context, headers, or an already-parsed token, and make no network calls. Return `nil` (or an identity with an empty `UserID`) to skip identification for a call.
+
+The callback receives the raw MCP request — in both adapters the value passed is the `*mcp.CallToolRequest` that triggered the event:
 
 **mark3labs/mcp-go:**
+
 ```go
 import (
     "github.com/mark3labs/mcp-go/mcp"
     agentcat "go.agentcat.com/sdk/mcpgo/v2"
 )
 
-shutdown, err := agentcat.Track(s, "proj_YOUR_PROJECT_ID", &agentcat.Options{
+shutdown, err := agentcat.Track(mcpServer, "proj_0000000", &agentcat.Options{
     Identify: func(ctx context.Context, request any) *agentcat.UserIdentity {
         req := request.(*mcp.CallToolRequest) // always a tool call in v2
         _ = req // extract identity from the request, ctx, headers, or an auth token
@@ -182,13 +140,14 @@ shutdown, err := agentcat.Track(s, "proj_YOUR_PROJECT_ID", &agentcat.Options{
 ```
 
 **Official go-sdk:**
+
 ```go
 import (
     "github.com/modelcontextprotocol/go-sdk/mcp"
     agentcat "go.agentcat.com/sdk/officialsdk/v2"
 )
 
-shutdown, err := agentcat.Track(s, "proj_YOUR_PROJECT_ID", &agentcat.Options{
+shutdown, err := agentcat.Track(mcpServer, "proj_0000000", &agentcat.Options{
     Identify: func(ctx context.Context, request mcp.Request) *agentcat.UserIdentity {
         req := request.(*mcp.CallToolRequest) // always a tool call in v2
         _ = req // extract identity from the request, ctx, headers, or an auth token
@@ -200,33 +159,14 @@ shutdown, err := agentcat.Track(s, "proj_YOUR_PROJECT_ID", &agentcat.Options{
 })
 ```
 
-### Custom Events
+### Redacting sensitive data
 
-Publish your own events alongside the automatic ones with `PublishCustomEvent`. The first argument is either a **session ID string**, used **verbatim** as the event's session (no derivation, no validation — so it correlates with whatever handle you already hold), or a **tracked server**, in which case the event publishes with no session unless you supply one. A non-empty `CustomEventData.SessionID` always wins.
-
-```go
-// Attribute the event to a session the agent is already using.
-err := agentcat.PublishCustomEvent("ses_abc123", "proj_YOUR_PROJECT_ID", &agentcat.CustomEventData{
-    ResourceName: "invoice.exported",
-    Message:      "user exported the quarterly invoice",
-    Properties:   map[string]any{"rows": 4218},
-})
-
-// Or pass the tracked server and name the session explicitly.
-err = agentcat.PublishCustomEvent(s, "proj_YOUR_PROJECT_ID", &agentcat.CustomEventData{
-    SessionID:       "ses_abc123",
-    ResourceName: "invoice.exported",
-})
-```
-
-### Sensitive Data Redaction
-
-AgentCat redacts all data sent to its servers and encrypts at rest, but for additional security, it offers a hook to do your own redaction on all text data before it leaves your server.
+AgentCat redacts all data sent to its servers and encrypts at rest, but for additional security, it offers a hook to do your own redaction on all text data returned back to our servers.
 
 ```go
-shutdown, err := agentcat.Track(s, "proj_YOUR_PROJECT_ID", &agentcat.Options{
+shutdown, err := agentcat.Track(mcpServer, "proj_0000000", &agentcat.Options{
     RedactSensitiveInformation: func(text string) string {
-        return emailRegex.ReplaceAllString(text, "[REDACTED]")
+        return redact(text)
     },
 })
 ```
@@ -234,7 +174,7 @@ shutdown, err := agentcat.Track(s, "proj_YOUR_PROJECT_ID", &agentcat.Options{
 For redaction decisions that need more context than a single string — such as which tool was called or what type of event is being published — use the event-level `RedactEvent` hook. It receives the full event object and returns a modified event, or `nil` to drop the event entirely. It can be combined with `RedactSensitiveInformation`.
 
 ```go
-shutdown, err := agentcat.Track(s, "proj_YOUR_PROJECT_ID", &agentcat.Options{
+shutdown, err := agentcat.Track(mcpServer, "proj_0000000", &agentcat.Options{
     RedactEvent: func(event *agentcat.Event) (*agentcat.Event, error) {
         // Drop events from tools that handle secrets entirely
         if event.GetResourceName() == "get_credentials" {
@@ -249,134 +189,58 @@ shutdown, err := agentcat.Track(s, "proj_YOUR_PROJECT_ID", &agentcat.Options{
 })
 ```
 
-When both hooks are configured, `RedactEvent` runs first and sees the raw, unredacted values; `RedactSensitiveInformation` then runs on its output as a final string-level scrub. The system-managed fields `Id`, `SessionId` (which carries the session ID), `ProjectId`, `EventType`, and `Timestamp` cannot be changed by the hook, and if the hook returns an error or panics, the event is dropped.
+### Vendor Support
 
-### Telemetry Exporters
-
-Send every captured event to your existing observability stack — in addition to (or instead of) the AgentCat platform. Four exporters are available: `otlp`, `datadog`, `sentry`, and `posthog`. Exporters run fire-and-forget in parallel with the AgentCat API send; an exporter failure never affects your server or the other exporters.
+AgentCat seamlessly integrates with your existing observability stack, providing automatic logging and tracing without the tedious setup typically required. Export telemetry data to multiple platforms simultaneously:
 
 ```go
-shutdown, err := agentcat.Track(s, "proj_YOUR_PROJECT_ID", &agentcat.Options{
+shutdown, err := agentcat.Track(mcpServer, "proj_0000", &agentcat.Options{
+    // Project ID can optionally be "" if you just want to forward telemetry
     Exporters: map[string]agentcat.ExporterConfig{
-        // OpenTelemetry (any OTLP/HTTP collector; /v1/traces is appended automatically)
         "otlp": {
             Type:     "otlp",
-            Endpoint: "http://localhost:4318",
-            Headers:  map[string]string{"Authorization": "Bearer TOKEN"}, // optional
+            Endpoint: "http://localhost:4318", // /v1/traces is appended automatically
         },
-        // Datadog (logs + metrics)
         "datadog": {
             Type:    "datadog",
             APIKey:  os.Getenv("DD_API_KEY"),
-            Site:    "datadoghq.com", // or datadoghq.eu, us3.datadoghq.com, ...
+            Site:    "datadoghq.com",
             Service: "my-mcp-server",
-            Env:     "production", // optional
         },
-        // Sentry (logs always; error events create Issues; transactions with EnableTracing)
         "sentry": {
-            Type:          "sentry",
-            DSN:           os.Getenv("SENTRY_DSN"),
-            Environment:   "production", // optional
-            Release:       "1.2.3",      // optional
-            EnableTracing: true,         // optional, default false
+            Type:        "sentry",
+            DSN:         os.Getenv("SENTRY_DSN"),
+            Environment: "production",
         },
-        // PostHog (batch capture; $exception on errors; $ai_span with EnableAITracing)
         "posthog": {
-            Type:            "posthog",
-            APIKey:          os.Getenv("POSTHOG_API_KEY"),
-            Host:            "https://us.i.posthog.com", // optional, default shown
-            EnableAITracing: true,                       // optional, default false
+            Type:   "posthog",
+            APIKey: os.Getenv("POSTHOG_API_KEY"),
+            Host:   "https://us.i.posthog.com", // Optional: defaults to US region
         },
     },
 })
 ```
 
-**Telemetry-only mode**: pass an empty project ID (`""`) with at least one exporter configured, and events go only to your exporters — no AgentCat account required.
-
-```go
-shutdown, err := agentcat.Track(s, "", &agentcat.Options{
-    Exporters: map[string]agentcat.ExporterConfig{
-        "otlp": {Type: "otlp", Endpoint: "http://localhost:4318"},
-    },
-})
-```
-
-### Debug Mode
-
-Enable debug logging for troubleshooting. Debug logs are written to `~/agentcat.log`.
-
-```go
-shutdown, err := agentcat.Track(s, "proj_YOUR_PROJECT_ID", &agentcat.Options{Debug: true})
-```
-
-### Using with Existing Hooks (mcp-go only)
-
-Nothing to configure — register your hooks the normal way, with `server.WithHooks` at construction, and AgentCat appends its own to them. It reads them back with `MCPServer.GetHooks()`, so the v1 `Options.Hooks` field is gone (it existed only to hand AgentCat hooks it can now find itself). If your server was built without hooks, AgentCat installs a fresh set.
-
-```go
-import (
-    "github.com/mark3labs/mcp-go/mcp"
-    "github.com/mark3labs/mcp-go/server"
-    agentcat "go.agentcat.com/sdk/mcpgo/v2"
-)
-
-myHooks := &server.Hooks{}
-myHooks.AddBeforeCallTool(func(ctx context.Context, id any, message *mcp.CallToolRequest) {
-    log.Printf("about to call %s", message.Params.Name)
-})
-
-s := server.NewMCPServer("my-server", "1.0.0", server.WithHooks(myHooks))
-
-shutdown, err := agentcat.Track(s, "proj_YOUR_PROJECT_ID", nil) // your hooks still run
-```
+Learn more about our free and open source [telemetry integrations](https://docs.agentcat.com/telemetry/integrations).
 
 ### Internal diagnostics
 
 To help us catch and fix broken installs, the SDK sends AgentCat a small, anonymized
 signal when setup or runtime errors occur — never your tool calls, your responses,
 or anything about your users. Records carry only operational metadata, such as your
-project ID (or an anonymous install ID when none is set), SDK version, and Go
-runtime/OS/arch. Your local `~/agentcat.log` is unchanged.
+project ID (or an anonymous install ID when none is set). Your local `~/agentcat.log`
+is unchanged.
 
 Diagnostics are on by default and can be turned off completely with either:
 
 - `agentcat.Options{DisableDiagnostics: true}` passed to `Track`, or
 - the `DISABLE_DIAGNOSTICS` environment variable.
 
-## Configuration Options
-
-Both adapters expose the same `Options` fields, and only the request-taking callbacks differ in signature:
-
-| Callback | mcpgo | Official go-sdk |
-|----------|-------|-----------------|
-| `Identify`, `EventTags`, `EventProperties` | `request any` | `request mcp.Request` |
-| `ResolveSessionID` | `request mcp.CallToolRequest` (a value) | `request mcp.Request` |
-
-All four fire only on tool calls, and in every case the value passed is the `*mcp.CallToolRequest` that triggered the event — except mcpgo's `ResolveSessionID`, which receives the request by value. The two redaction hooks (`RedactSensitiveInformation`, `RedactEvent`) take no request at all.
-
-| Option | Type | Default | Description |
-|--------|------|---------|-------------|
-| `DisableReportMissing` | `bool` | `false` | When `true`, prevents the `get_more_tools` tool from being registered |
-| `DisableToolCallContext` | `bool` | `false` | When `true`, prevents the `context` parameter from being injected on tool calls |
-| `DisableTracing` | `bool` | `false` | When `true`, publishes no events **and** injects no `session_id`/`agent_id` handles; `context` and `get_more_tools` still honor their own flags |
-| `CustomContextDescription` | `string` | `""` | Overrides the description of the injected `context` parameter; only applies when context injection is enabled |
-| `EnableAgentTracking` | `bool` | `false` | When `true`, injects an agent-self-chosen `agent_id` parameter into tool schemas (marked `required` where injected, best-effort per tool); an omitted value never rejects the call |
-| `ResolveSessionID` | callback | `nil` | Hook mode: return your own correlation ID and AgentCat derives the session from it. No `session_id` is injected and no session instructions are shown. Runs on every tool call — keep it cheap |
-| `Debug` | `bool` | `false` | Enable debug logging to `~/agentcat.log` |
-| `Identify` | callback | `nil` | Runs on every tool call, uncached, and stamps that one event with the returned identity. There is no identity cache and no identify event — keep it cheap, with no network calls |
-| `EventTags` | callback | `nil` | Returns string key-value tags for the event. Keys ≤32 chars matching `[a-zA-Z0-9$_.:\- ]`, values ≤200 chars without newlines, ≤50 entries; invalid entries are dropped with a warning |
-| `EventProperties` | callback | `nil` | Returns arbitrary JSON metadata to attach to the event (no validation applied) |
-| `RedactSensitiveInformation` | `func(string) string` | `nil` | Custom redaction applied to all text data before sending |
-| `RedactEvent` | `func(*Event) (*Event, error)` | `nil` | Event-level redaction hook; rewrite the full event or return `nil` to drop it |
-| `DisableDiagnostics` | `bool` | `false` | Turns off AgentCat's anonymized SDK diagnostics; also settable via the `DISABLE_DIAGNOSTICS` env var |
-| `APIBaseURL` | `string` | `https://api.agentcat.com` | Override the AgentCat API endpoint; falls back to `AGENTCAT_API_URL`, then the legacy `MCPCAT_API_URL` env var |
-| `Exporters` | `map[string]ExporterConfig` | `nil` | Telemetry exporters (`otlp`, `datadog`, `sentry`, `posthog`); with at least one exporter, the project ID may be empty (telemetry-only mode) |
-
 ## Free for open source
 
 AgentCat is free for qualified open source projects. We believe in supporting the ecosystem that makes MCP possible. If you maintain an open source MCP server, you can access our full analytics platform at no cost.
 
-**How to apply**: Email hi@agentcat.com with your repository link
+**How to apply**: Email [hi@agentcat.com](mailto:hi@agentcat.com) with your repository link
 
 _Already using AgentCat? We'll upgrade your account immediately._
 
@@ -389,4 +253,4 @@ Meet the cats behind AgentCat! Add your cat to our community by submitting a PR 
   <img src="docs/cats/zelda.jpg" alt="zelda" width="80" height="80">
 </div>
 
-_Want to add your cat? Create a PR adding your cat's photo to `docs/cats/` and update this section!_
+_Want to add your cat? Create a PR adding your cat's photo to_ `docs/cats/` _and update this section!_

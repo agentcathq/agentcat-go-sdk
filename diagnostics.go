@@ -1,6 +1,10 @@
 package agentcat
 
 import (
+	"fmt"
+	"runtime"
+
+	"go.agentcat.com/sdk/v2/internal/core"
 	"go.agentcat.com/sdk/v2/internal/diagnostics"
 	"go.agentcat.com/sdk/v2/internal/logging"
 )
@@ -10,6 +14,9 @@ import (
 // captured. Idempotent across the process.
 func InitDiagnostics(projectID string, disabled bool, integration, mcpSDKPath string) {
 	diagnostics.Init(projectID, disabled, integration, mcpSDKPath)
+	logging.SetVersionSuffix(fmt.Sprintf(" | sdk=%s go=%s mcp=%s",
+		core.GetDependencyVersion(core.SDKModulePath), runtime.Version(),
+		core.GetDependencyVersion(mcpSDKPath)))
 	logging.New().Infof("AgentCat setup started | project %s | integration %s",
 		orTelemetryOnly(projectID), integration)
 }

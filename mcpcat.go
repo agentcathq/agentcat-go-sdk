@@ -124,6 +124,9 @@ func ValidateTags(tags map[string]string) map[string]string {
 	return validation.ValidateTags(tags)
 }
 
+// SDKModulePath is this SDK's root module path, used to resolve its own version.
+const SDKModulePath = core.SDKModulePath
+
 // GetDependencyVersion returns the version of the given module from build info,
 // or "dev" if the module is not found.
 func GetDependencyVersion(modulePath string) string {

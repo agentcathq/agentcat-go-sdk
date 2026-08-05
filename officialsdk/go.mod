@@ -4,7 +4,7 @@ go 1.25.0
 
 require (
 	github.com/modelcontextprotocol/go-sdk v1.7.0
-	go.agentcat.com/sdk/v2 v2.0.0-beta.1
+	go.agentcat.com/sdk/v2 v2.0.0
 )
 
 require (

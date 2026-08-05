@@ -124,3 +124,52 @@ func stashRebuildOnThrowaway(t *testing.T, instance *agentcat.AgentCatInstance) 
 	}
 	return weak.Make(s)
 }
+
+// trackThrowawaySharedServer is one round of the per-request factory topology
+// with a customer-shared Hooks value: a fresh server per request, tracked, and
+// dropped.
+//
+//go:noinline
+func trackThrowawaySharedServer(t *testing.T, shared *server.Hooks) weak.Pointer[server.MCPServer] {
+	t.Helper()
+	s, _ := CreateTodoServerSimple(server.WithHooks(shared))
+	if _, err := Track(s, "proj_topology_shared", &Options{DisableTracing: true}); err != nil {
+		t.Fatalf("Track: %v", err)
+	}
+	if getMCPcat(s) == nil {
+		t.Fatal("Track did not register the server")
+	}
+	return weak.Make(s)
+}
+
+// TestSharedHooksServersAreReleasedWhenUnreachable pins the shared-Hooks leak:
+// hook closures appended to a customer's long-lived Hooks value used to
+// capture each server strongly, so every dead request's server — tools,
+// handlers, stashed results — stayed reachable from the customer's Hooks
+// forever and runtime.AddCleanup never fired. With context-dispatched hooks,
+// every dropped server must be collectible.
+func TestSharedHooksServersAreReleasedWhenUnreachable(t *testing.T) {
+	shared := &server.Hooks{}
+
+	weakServers := make([]weak.Pointer[server.MCPServer], 0, 10)
+	for range 10 {
+		weakServers = append(weakServers, trackThrowawaySharedServer(t, shared))
+	}
+	for i, wp := range weakServers {
+		if !awaitCollected(wp, 10*time.Second) {
+			t.Fatalf("server %d is pinned through the customer's shared Hooks value: "+
+				"a per-request Track() factory sharing one Hooks leaks every request's server", i)
+		}
+	}
+	// The Hooks value itself must not have grown per Track.
+	if got := len(shared.OnAfterListTools); got != 1 {
+		t.Errorf("shared Hooks accumulated %d AfterListTools closures, want 1", got)
+	}
+	if got := len(shared.OnError); got != 1 {
+		t.Errorf("shared Hooks accumulated %d OnError closures, want 1", got)
+	}
+	if got := len(shared.OnAfterCallTool); got != 1 {
+		t.Errorf("shared Hooks accumulated %d AfterCallTool closures, want 1", got)
+	}
+	runtime.KeepAlive(shared)
+}

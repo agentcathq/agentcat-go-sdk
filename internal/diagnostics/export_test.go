@@ -59,6 +59,19 @@ func TestExport_PostsOTLPWithAuth(t *testing.T) {
 	if len(recs) == 0 || recs[0].Body.StringValue != "AgentCat setup started | project proj_1" {
 		t.Fatalf("logRecords = %+v, want body match", recs)
 	}
+	recAttrs := map[string]bool{}
+	for _, a := range recs[0].Attributes {
+		recAttrs[a.Key] = a.Value.StringValue != ""
+	}
+	for _, key := range []string{
+		"agentcat.sdk.version",
+		"agentcat.mcp_sdk.version",
+		"process.runtime.version",
+	} {
+		if !recAttrs[key] {
+			t.Errorf("posted logRecord missing version attribute %q: %+v", key, recs[0].Attributes)
+		}
+	}
 	var hasProject bool
 	for _, a := range rl.Resource.Attributes {
 		if a.Key == "agentcat.project_id" && a.Value.StringValue == "proj_1" {

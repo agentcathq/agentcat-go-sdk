@@ -119,7 +119,7 @@ func PublishCustomEvent(serverOrSessionID any, projectID string, data *CustomEve
 	}
 
 	evt.SdkLanguage = core.Ptr("Go")
-	evt.AgentcatVersion = core.Ptr(core.GetDependencyVersion("go.agentcat.com/sdk/v2"))
+	evt.AgentcatVersion = core.Ptr(core.GetDependencyVersion(core.SDKModulePath))
 
 	// Publish through the global publisher, initializing it if needed.
 	// For tracked servers, reuse the server's redaction, API base URL, and

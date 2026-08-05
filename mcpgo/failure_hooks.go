@@ -118,8 +118,11 @@ func (p *pendingCalls) claim(result *mcp.CallToolResult) *callRecord {
 
 // registerFailureHooks wires the two hooks that publish tool-call events
 // outside the middleware. Both are filtered strictly to tools/call; no other
-// method publishes anything.
-func registerFailureHooks(hooks *server.Hooks, c *capturer) {
+// method publishes anything. Registered once per Hooks value: the closures
+// capture no capturer — they resolve the request's server to its capturer per
+// call, so the same closures serve every tracked server sharing these Hooks
+// and stand down for untracked ones.
+func registerFailureHooks(hooks *server.Hooks) {
 	// Pre-handler rejections that surface as protocol errors: unknown tool and
 	// tool-filter rejection, both of which wrap ErrToolNotFound. Handler
 	// errors also land here, but the middleware publishes those (it holds the
@@ -130,7 +133,11 @@ func registerFailureHooks(hooks *server.Hooks, c *capturer) {
 				agentcat.LogRecoveredPanic("mcpgo failure capture", r)
 			}
 		}()
-		if method != mcp.MethodToolsCall || !c.servesRequest(ctx) {
+		if method != mcp.MethodToolsCall {
+			return
+		}
+		c := capturerFromContext(ctx)
+		if c == nil {
 			return
 		}
 		request, ok := message.(*mcp.CallToolRequest)
@@ -153,7 +160,11 @@ func registerFailureHooks(hooks *server.Hooks, c *capturer) {
 				agentcat.LogRecoveredPanic("mcpgo call capture", r)
 			}
 		}()
-		if message == nil || !c.servesRequest(ctx) {
+		if message == nil {
+			return
+		}
+		c := capturerFromContext(ctx)
+		if c == nil {
 			return
 		}
 		toolResult, _ := result.(*mcp.CallToolResult)

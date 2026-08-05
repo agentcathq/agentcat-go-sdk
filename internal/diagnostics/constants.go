@@ -20,9 +20,6 @@ const (
 	// DIAGNOSTICS_TOKEN.
 	DefaultDiagnosticsToken = "dgk_sdk_diag_3f9a2c7e1b8d4065af2e9c1d7b6a4f80"
 
-	// sdkModulePath is this SDK's module path, used to resolve its own version.
-	sdkModulePath = "go.agentcat.com/sdk/v2"
-
 	// maxBuffer caps buffered log records (drop-oldest on overflow).
 	maxBuffer = 1000
 )

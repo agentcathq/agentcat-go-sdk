@@ -127,18 +127,15 @@ Migrate this project from the Go module `github.com/mcpcat/mcpcat-go-sdk` to its
 
 ## v2.0.0 — Explicit session handles (MCP 2026-07-28)
 
-**Currently shipping as `v2.0.0-beta.1`.** Import paths changed to
+**Shipping as `v2.0.0`.** Import paths changed to
 `go.agentcat.com/sdk/v2`, `go.agentcat.com/sdk/mcpgo/v2`,
 `go.agentcat.com/sdk/officialsdk/v2`, so v1 keeps resolving untouched and you
 can adopt v2 one service at a time.
 
 ```bash
-go get go.agentcat.com/sdk/mcpgo/v2@v2.0.0-beta.1        # mark3labs/mcp-go
-go get go.agentcat.com/sdk/officialsdk/v2@v2.0.0-beta.1  # official go-sdk
+go get go.agentcat.com/sdk/mcpgo/v2        # mark3labs/mcp-go
+go get go.agentcat.com/sdk/officialsdk/v2  # official go-sdk
 ```
-
-Name the version explicitly. `go get` without one resolves `@latest`, and
-`@latest` never selects a prerelease — a bare `go get …/v2` finds nothing.
 
 **You do not have to upgrade your MCP library to adopt v2.** Supported ranges
 are `modelcontextprotocol/go-sdk v1.4.1 – v1.7.0` and

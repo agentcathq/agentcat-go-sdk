@@ -6,6 +6,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 
@@ -55,6 +56,40 @@ func TestTrack_EmitsSetupBeacons(t *testing.T) {
 		!strings.Contains(body, "proj_test") ||
 		!strings.Contains(body, "integration officialsdk") {
 		t.Fatalf("beacons missing in diagnostics body:\n%s", body)
+	}
+}
+
+// TestTrack_FailedSetupWritesDebugLog pins Debug's promise on the one path
+// where the customer most needs the log: a Track that fails validation must
+// still write its setup-started and setup-failed lines to ~/agentcat.log.
+// The setup-started line is also the only one naming the integration.
+func TestTrack_FailedSetupWritesDebugLog(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+	t.Cleanup(func() { agentcat.SetDebug(false) })
+
+	server := mcp.NewServer(&mcp.Implementation{Name: "test", Version: "1.0.0"}, nil)
+	_, err := Track(server, "", &Options{Debug: true})
+	if err != agentcat.ErrEmptyProjectID {
+		t.Fatalf("err = %v, want ErrEmptyProjectID", err)
+	}
+
+	body, readErr := os.ReadFile(filepath.Join(os.Getenv("HOME"), "agentcat.log"))
+	if readErr != nil {
+		t.Fatalf("agentcat.log was not written despite Debug: true: %v", readErr)
+	}
+	for _, want := range []string{
+		"AgentCat setup started",
+		"integration officialsdk",
+		"AgentCat setup failed",
+		// Version suffix labels on every line. Values resolve to "dev" here:
+		// test binaries carry no dependency stamps in their build info.
+		" | sdk=",
+		" go=go1.",
+		" mcp=",
+	} {
+		if !strings.Contains(string(body), want) {
+			t.Errorf("agentcat.log missing %q; log:\n%s", want, body)
+		}
 	}
 }
 

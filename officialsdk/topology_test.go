@@ -90,3 +90,82 @@ func TestLiveTrackedServerSurvivesGC(t *testing.T) {
 	}
 	runtime.KeepAlive(s)
 }
+
+// trackThrowawayServerWithCustomerMiddleware is the factory-topology shape
+// that used to leak: customer receiving middleware whose closure captures the
+// server, added BEFORE Track. The stashed rebuild chain includes that closure,
+// so a strong RebuildTools→chain reference would give the registry a permanent
+// path to the server.
+//
+//go:noinline
+func trackThrowawayServerWithCustomerMiddleware(t *testing.T) weak.Pointer[mcp.Server] {
+	t.Helper()
+	s := mcp.NewServer(&mcp.Implementation{Name: "throwaway-mw", Version: "1.0.0"}, nil)
+	mcp.AddTool(s, &mcp.Tool{Name: "noop", Description: "does nothing"},
+		func(ctx context.Context, req *mcp.CallToolRequest, args struct{}) (*mcp.CallToolResult, struct{}, error) {
+			return nil, struct{}{}, nil
+		})
+	s.AddReceivingMiddleware(func(next mcp.MethodHandler) mcp.MethodHandler {
+		return func(ctx context.Context, method string, req mcp.Request) (mcp.Result, error) {
+			_ = s // the customer's closure holds the server
+			return next(ctx, method, req)
+		}
+	})
+	if _, err := Track(s, "proj_topology_mw", &Options{DisableTracing: true}); err != nil {
+		t.Fatalf("Track: %v", err)
+	}
+	// Guard against a vacuous pass: the entry and the stashed rebuild chain
+	// must both exist before we ask whether the server is released.
+	instance := getMCPcat(s)
+	if instance == nil {
+		t.Fatal("Track did not register the server")
+	}
+	if instance.RebuildTools == nil {
+		t.Fatal("Track did not stash the rebuild chain")
+	}
+	return weak.Make(s)
+}
+
+// TestTrackedServerWithCustomerMiddlewareIsReleased pins the weak rebuild
+// holder: with customer middleware capturing the server in the chain, the
+// registry must still release the server once the customer drops it.
+func TestTrackedServerWithCustomerMiddlewareIsReleased(t *testing.T) {
+	wp := trackThrowawayServerWithCustomerMiddleware(t)
+
+	if !awaitCollected(wp, 10*time.Second) {
+		t.Fatal("RebuildTools pinned the handler chain: a customer middleware closure " +
+			"holding the server keeps it reachable from the registry forever, so a " +
+			"per-request Track() factory leaks one server per request")
+	}
+}
+
+// stashThrowawayRebuild stashes a rebuild whose holder nothing keeps alive,
+// standing in for a collected server (the middleware handler that normally
+// owns the holder died with it).
+//
+//go:noinline
+func stashThrowawayRebuild(instance *agentcat.AgentCatInstance) weak.Pointer[rebuildTarget] {
+	target := &rebuildTarget{next: func(ctx context.Context, method string, req mcp.Request) (mcp.Result, error) {
+		return &mcp.ListToolsResult{}, nil
+	}}
+	stashRebuild(instance, target)
+	return weak.Make(target)
+}
+
+// TestRebuildStandsDownOnCollectedChain: once the holder is gone, RebuildTools
+// must degrade to "no tools" — never panic, never resurrect the chain.
+func TestRebuildStandsDownOnCollectedChain(t *testing.T) {
+	instance := &agentcat.AgentCatInstance{Options: &agentcat.Options{}}
+	wp := stashThrowawayRebuild(instance)
+
+	if !awaitCollected(wp, 10*time.Second) {
+		t.Fatal("nothing should keep the rebuild holder alive here")
+	}
+	tools, err := instance.RebuildTools(context.Background(), nil)
+	if err != nil {
+		t.Fatalf("RebuildTools on a collected chain: %v", err)
+	}
+	if tools != nil {
+		t.Errorf("RebuildTools on a collected chain must stand down, got %+v", tools)
+	}
+}

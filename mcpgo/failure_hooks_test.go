@@ -416,6 +416,68 @@ func TestSharedHooksAcrossServersAttributeCorrectly(t *testing.T) {
 	}
 }
 
+// TestSharedHooksAreInstrumentedExactlyOnce pins the O(requests) growth bug:
+// AgentCat's hook closures dispatch on the request context, so tracking N
+// servers that share one *server.Hooks value must append its three closures
+// once, not N times — in the per-request factory topology every extra trio
+// outlives its server on the customer's long-lived Hooks value and every
+// request iterates all of them.
+func TestSharedHooksAreInstrumentedExactlyOnce(t *testing.T) {
+	shared := &server.Hooks{}
+
+	type tracked struct {
+		server *server.MCPServer
+		mock   *mockPublisher
+		proj   string
+		tool   string
+	}
+	servers := make([]tracked, 0, 3)
+	for i, proj := range []string{"proj_once_a", "proj_once_b", "proj_once_c"} {
+		tool := fmt.Sprintf("tool_%d", i)
+		s := server.NewMCPServer(fmt.Sprintf("shared-%d", i), "1.0.0",
+			server.WithToolCapabilities(true),
+			server.WithHooks(shared),
+		)
+		s.AddTool(
+			mcp.NewTool(tool, mcp.WithDescription("per-server tool")),
+			func(ctx context.Context, request mcp.CallToolRequest) (*mcp.CallToolResult, error) {
+				return mcp.NewToolResultText("ok"), nil
+			},
+		)
+		instance := newTestInstance(s, proj, DefaultOptions())
+		agentcat.RegisterServer(s, instance)
+		t.Cleanup(func() { unregisterServer(s) })
+		mock := &mockPublisher{}
+		installTracking(s, instance, DefaultOptions(), mock.publish)
+
+		if got := len(shared.OnAfterListTools); got != 1 {
+			t.Fatalf("after install %d: %d AfterListTools hooks, want 1", i+1, got)
+		}
+		if got := len(shared.OnError); got != 1 {
+			t.Fatalf("after install %d: %d OnError hooks, want 1", i+1, got)
+		}
+		if got := len(shared.OnAfterCallTool); got != 1 {
+			t.Fatalf("after install %d: %d AfterCallTool hooks, want 1", i+1, got)
+		}
+		servers = append(servers, tracked{server: s, mock: mock, proj: proj, tool: tool})
+	}
+
+	// The single closure trio still serves every server: one event each,
+	// attributed to the server that took the call.
+	for _, tr := range servers {
+		callToolRaw(t, tr.server, tr.tool, map[string]any{})
+	}
+	for _, tr := range servers {
+		events := filterEvents(tr.mock.getEvents(), "mcp:tools/call")
+		if len(events) != 1 {
+			t.Fatalf("%s published %d events, want 1", tr.proj, len(events))
+		}
+		if events[0].ProjectId != tr.proj {
+			t.Errorf("event misattributed: got project %q, want %q", events[0].ProjectId, tr.proj)
+		}
+	}
+}
+
 // TestNilResultCallResolvesHandlesOnce pins that a handler returning no result
 // at all still resolves its handles exactly once: the customer's ResolveSessionID
 // hook runs on every tool call, but never twice for the same call.

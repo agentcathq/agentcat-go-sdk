@@ -249,11 +249,12 @@ func TestApplyInjectedToolsKeepsRegisteredSchemaUntouched(t *testing.T) {
 // TestListInjectionHookIsSafeWithoutInstanceOrResult covers the hook's guards:
 // an untracked server and a nil result are both no-ops, never panics.
 //
-// Both guards sit BEHIND the server-identity guard, which stands down unless
-// the in-flight request belongs to this server — and only mcp-go itself puts
-// a server in the request context. So the hook is driven through the server's
-// own message entry point, and the nil-result case reuses the context that
-// entry point built, or neither guard would ever be reached.
+// Both guards sit BEHIND the context-dispatch guard, which resolves the
+// in-flight request's server (only mcp-go itself puts one in the request
+// context) and stands down when there is none or it is untracked. So the
+// hook is driven through the server's own message entry point, and the
+// nil-result case reuses the context that entry point built, or neither
+// guard would ever be reached.
 func TestListInjectionHookIsSafeWithoutInstanceOrResult(t *testing.T) {
 	hooks := &server.Hooks{}
 	mcpServer := server.NewMCPServer(
@@ -268,7 +269,7 @@ func TestListInjectionHookIsSafeWithoutInstanceOrResult(t *testing.T) {
 			return mcp.NewToolResultText("ok"), nil
 		},
 	)
-	registerListInjection(hooks, mcpServer, false)
+	registerListInjection(hooks)
 
 	if len(hooks.OnAfterListTools) != 1 {
 		t.Fatalf("expected exactly 1 AfterListTools hook, got %d", len(hooks.OnAfterListTools))
