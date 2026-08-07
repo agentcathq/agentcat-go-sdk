@@ -33,7 +33,7 @@ jobs:
         cd ../officialsdk && go test -v -race -coverprofile=coverage-officialsdk.out ./...
 
     - name: Upload coverage
-      uses: codecov/codecov-action@v4
+      uses: codecov/codecov-action@v7
       with:
         files: ./coverage-root.out,./mcpgo/coverage-mcpgo.out,./officialsdk/coverage-officialsdk.out
         fail_ci_if_error: false
