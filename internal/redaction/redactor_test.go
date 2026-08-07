@@ -357,6 +357,75 @@ func TestRedactEvent(t *testing.T) {
 	}
 }
 
+// TestRedactEvent_FieldsNeverReachRedactFn locks in that ServerName,
+// ServerVersion, ClientName, ClientVersion, Tags, and Properties never reach
+// the customer's RedactFunc. RedactEvent only ever walks Parameters,
+// Response, UserIntent, and Error (an allow-list, not a deny-list), so these
+// fields are excluded by construction today; this test exists so a future
+// change that widens the walked field set can't silently start redacting
+// them without a test failing.
+func TestRedactEvent_FieldsNeverReachRedactFn(t *testing.T) {
+	tagsVal := map[string]string{"env": "prod"}
+	event := &core.Event{
+		PublishEventRequest: agentcatapi.PublishEventRequest{
+			ServerName:    strPtr("my-mcp-server"),
+			ServerVersion: strPtr("1.2.3"),
+			ClientName:    strPtr("my-mcp-client"),
+			ClientVersion: strPtr("4.5.6"),
+			Tags:          &tagsVal,
+			Properties: map[string]any{
+				"plan": "enterprise",
+			},
+			Parameters: map[string]any{
+				"key": "sensitive data",
+			},
+		},
+	}
+
+	var seen []string
+	redactFn := func(s string) string {
+		seen = append(seen, s)
+		return "[REDACTED]"
+	}
+
+	if err := RedactEvent(event, redactFn); err != nil {
+		t.Fatalf("RedactEvent() error = %v", err)
+	}
+
+	// Parameters still gets redacted, proving redactFn actually ran.
+	if !mapsEqual(event.Parameters, map[string]any{"key": "[REDACTED]"}) {
+		t.Errorf("Parameters mismatch: got %+v", event.Parameters)
+	}
+
+	// The six fields must survive unchanged.
+	if !strPtrEqual(event.ServerName, strPtr("my-mcp-server")) {
+		t.Errorf("ServerName mismatch: got %v", ptrVal(event.ServerName))
+	}
+	if !strPtrEqual(event.ServerVersion, strPtr("1.2.3")) {
+		t.Errorf("ServerVersion mismatch: got %v", ptrVal(event.ServerVersion))
+	}
+	if !strPtrEqual(event.ClientName, strPtr("my-mcp-client")) {
+		t.Errorf("ClientName mismatch: got %v", ptrVal(event.ClientName))
+	}
+	if !strPtrEqual(event.ClientVersion, strPtr("4.5.6")) {
+		t.Errorf("ClientVersion mismatch: got %v", ptrVal(event.ClientVersion))
+	}
+	if event.Tags == nil || (*event.Tags)["env"] != "prod" {
+		t.Errorf("Tags mismatch: got %+v", event.Tags)
+	}
+	if !mapsEqual(event.Properties, map[string]any{"plan": "enterprise"}) {
+		t.Errorf("Properties mismatch: got %+v", event.Properties)
+	}
+
+	// None of their values should ever have reached redactFn.
+	for _, s := range seen {
+		switch s {
+		case "my-mcp-server", "1.2.3", "my-mcp-client", "4.5.6", "prod", "enterprise":
+			t.Errorf("redactFn was called with protected value %q", s)
+		}
+	}
+}
+
 func TestRedactMap(t *testing.T) {
 	tests := []struct {
 		name     string
