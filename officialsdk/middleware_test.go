@@ -200,9 +200,10 @@ func TestMiddleware_ToolCall_CreatesEvent(t *testing.T) {
 	if len(result.Content) == 0 {
 		t.Fatal("expected non-empty content")
 	}
-	if tc, ok := result.Content[0].(*mcp.TextContent); ok {
+	if tc, ok := result.Content[len(result.Content)-1].(*mcp.TextContent); ok {
 		// With mcp.AddTool(), the typed result struct is JSON-serialized.
-		// (The v2 mint-back block is appended AFTER the customer content.)
+		// (The v2 mint-back block is prepended BEFORE the customer content,
+		// so the customer's text is the last block.)
 		if tc.Text != `{"text":"Hello, World!"}` {
 			t.Errorf("expected '{\"text\":\"Hello, World!\"}', got '%s'", tc.Text)
 		}
@@ -666,8 +667,8 @@ func TestStructuredContentAsMap(t *testing.T) {
 	if !ok {
 		t.Fatal("map input must convert")
 	}
-	got["_mcp_instructions"] = "mirror"
-	if _, leaked := orig["_mcp_instructions"]; leaked {
+	got["mcp_session"] = "mirror"
+	if _, leaked := orig["mcp_session"]; leaked {
 		t.Error("conversion must copy: the customer's structuredContent was mutated")
 	}
 }
@@ -733,7 +734,7 @@ func TestMiddleware_GetMoreTools_Call(t *testing.T) {
 	if len(result.Content) == 0 {
 		t.Fatal("expected non-empty content")
 	}
-	if tc, ok := result.Content[0].(*mcp.TextContent); ok {
+	if tc, ok := result.Content[len(result.Content)-1].(*mcp.TextContent); ok {
 		if !strings.Contains(tc.Text, "full tool list") {
 			t.Errorf("expected response to mention full tool list, got '%s'", tc.Text)
 		}

@@ -334,8 +334,8 @@ func TestEvictedRecordPublishesUndecoratedResponse(t *testing.T) {
 		t.Fatalf("CallTool: %v", err)
 	}
 	// Precondition: the wire result really is decorated.
-	if !strings.Contains(lastText(t, res), "session_id issued") {
-		t.Fatalf("fixture must produce a decorated wire result: %q", lastText(t, res))
+	if !strings.Contains(firstText(t, res), "session_id issued") {
+		t.Fatalf("fixture must produce a decorated wire result: %q", firstText(t, res))
 	}
 
 	var evt *agentcat.Event
@@ -349,10 +349,10 @@ func TestEvictedRecordPublishesUndecoratedResponse(t *testing.T) {
 	}
 
 	response := fmt.Sprint(evt.Response)
-	if strings.Contains(response, "MCP INSTRUCTIONS") {
+	if strings.Contains(response, "[session_id") {
 		t.Errorf("mint-back leaked into the published event response: %s", response)
 	}
-	if strings.Contains(response, "_mcp_instructions") {
+	if strings.Contains(response, "mcp_session") {
 		t.Errorf("mirror leaked into the published event response: %s", response)
 	}
 	if !strings.Contains(response, "structured") {

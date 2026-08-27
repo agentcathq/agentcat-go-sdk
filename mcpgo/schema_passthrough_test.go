@@ -78,7 +78,7 @@ func TestUnparseableOutputSchemaIsAdvertisedUntouched(t *testing.T) {
 
 	res, _ := h.call("opaque_output", map[string]any{"session_id": sid("o")})
 	sc, _ := res.StructuredContent.(map[string]any)
-	if _, has := sc["_mcp_instructions"]; has {
+	if _, has := sc["mcp_session"]; has {
 		t.Errorf("a schema the SDK cannot read must not be mirrored into: %v", sc)
 	}
 }

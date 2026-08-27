@@ -126,7 +126,7 @@ func TestCustomerOwnedSessionParamIsForeign(t *testing.T) {
 		t.Errorf("session source tag = %q, want foreign", got)
 	}
 	raw, _ := json.Marshal(res)
-	if strings.Contains(string(raw), "MCP INSTRUCTIONS") || strings.Contains(string(raw), "_mcp_instructions") {
+	if strings.Contains(string(raw), "[session_id") || strings.Contains(string(raw), "mcp_session") {
 		t.Errorf("AgentCat must say nothing about a parameter that is not ours: %s", raw)
 	}
 }
@@ -211,7 +211,7 @@ func TestInvalidCorrectionReachesTheAgentOnly(t *testing.T) {
 	// The agent is corrected, on the wire.
 	var corrected bool
 	for _, c := range res.Content {
-		if tc, ok := c.(mcp.TextContent); ok && strings.Contains(tc.Text, "session_id not recognized") {
+		if tc, ok := c.(mcp.TextContent); ok && strings.Contains(tc.Text, "[session_id unrecognized") {
 			corrected = true
 		}
 	}
@@ -221,7 +221,7 @@ func TestInvalidCorrectionReachesTheAgentOnly(t *testing.T) {
 
 	// The event carries the customer's original response only.
 	resp := fmt.Sprint(evt.Response)
-	if strings.Contains(resp, "not recognized") || strings.Contains(resp, "MCP INSTRUCTIONS") {
+	if strings.Contains(resp, "unrecognized") || strings.Contains(resp, "[session_id") {
 		t.Errorf("the correction leaked into the published event: %s", resp)
 	}
 }
@@ -234,8 +234,8 @@ func TestUndecorateStripsTheCorrection(t *testing.T) {
 		agentcat.SessionResolution{Source: agentcat.SessionSourceInvalid})
 
 	decorated := &mcp.CallToolResult{Content: []mcp.Content{
-		mcp.NewTextContent("the customer's own answer"),
 		mcp.NewTextContent(correction),
+		mcp.NewTextContent("the customer's own answer"),
 	}}
 	got := undecorateResult(decorated)
 	if len(got.Content) != 1 {
@@ -247,10 +247,71 @@ func TestUndecorateStripsTheCorrection(t *testing.T) {
 
 	// A customer block that merely mentions the phrase is NOT ours to remove.
 	customer := &mcp.CallToolResult{Content: []mcp.Content{
-		mcp.NewTextContent("my docs explain that session_id not recognized means retry"),
+		mcp.NewTextContent("my docs explain that session_id unrecognized means retry"),
 	}}
 	if len(undecorateResult(customer).Content) != 1 {
 		t.Error("undecoration must only remove blocks it can rebuild byte-for-byte")
+	}
+}
+
+// TestUndecorateStripsMintedDecorationAndMirror pins the full round-trip for
+// the decoration decorateResult writes today: the minted block at the FIRST
+// content position and the {session_id, agent_id, status} mirror. Both must be
+// rebuilt and removed so the published event carries the customer's original
+// result; a mirror this SDK could not have built must survive untouched.
+func TestUndecorateStripsMintedDecorationAndMirror(t *testing.T) {
+	id := sid("undecorate")
+	minted := agentcat.BuildMintBackText(
+		agentcat.SessionResolution{SessionID: id, Source: agentcat.SessionSourceMinted})
+
+	decorated := &mcp.CallToolResult{
+		Content: []mcp.Content{
+			mcp.NewTextContent(minted),
+			mcp.NewTextContent("the customer's own answer"),
+		},
+		StructuredContent: map[string]any{
+			"text": "payload",
+			"mcp_session": map[string]any{
+				"session_id": id,
+				"agent_id":   "opus|cc|k3n9x",
+				"status":     "issued",
+			},
+		},
+	}
+
+	got := undecorateResult(decorated)
+	if len(got.Content) != 1 {
+		t.Fatalf("undecoration left %d blocks, want 1: %+v", len(got.Content), got.Content)
+	}
+	if tc, ok := got.Content[0].(mcp.TextContent); !ok || tc.Text != "the customer's own answer" {
+		t.Errorf("undecoration removed the wrong block: %+v", got.Content[0])
+	}
+	sc, ok := got.StructuredContent.(map[string]any)
+	if !ok {
+		t.Fatalf("structuredContent = %T, want a JSON object", got.StructuredContent)
+	}
+	if _, has := sc["mcp_session"]; has {
+		t.Errorf("the mirror must be removed: %v", sc)
+	}
+	if sc["text"] != "payload" {
+		t.Errorf("customer structured payload must survive: %v", sc)
+	}
+
+	// The hook/foreign shape — agent_id alone — is ours too.
+	agentOnly := &mcp.CallToolResult{StructuredContent: map[string]any{
+		"mcp_session": map[string]any{"agent_id": "opus|cc|k3n9x"},
+	}}
+	if sc, ok := undecorateResult(agentOnly).StructuredContent.(map[string]any); !ok || sc["mcp_session"] != nil {
+		t.Errorf("the agent-only mirror must be removed: %v", sc)
+	}
+
+	// A near-miss this SDK never builds (issued session named with the wrong
+	// status) is not provably ours and must be left alone.
+	nearMiss := &mcp.CallToolResult{StructuredContent: map[string]any{
+		"mcp_session": map[string]any{"session_id": id, "status": "confirmed"},
+	}}
+	if sc, ok := undecorateResult(nearMiss).StructuredContent.(map[string]any); !ok || sc["mcp_session"] == nil {
+		t.Error("a mirror this SDK could not have built must survive undecoration")
 	}
 }
 

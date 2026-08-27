@@ -298,28 +298,30 @@ func decorateResult(
 	cp := *res
 	cp.Content = append([]mcp.Content(nil), res.Content...)
 
-	// (a) Trailing text block: on the call that minted a new session, and on
+	// (a) Leading text block: on the call that minted a new session, and on
 	// one that sent a session_id this server never issued. BuildMintBackText
 	// owns that decision — hook mode, foreign and supplied all return "".
-	// Applied unconditionally otherwise: to error results (the retry after an
-	// error must carry the same session) and to tools that return no content
-	// at all (structured-only tools would otherwise never learn their session,
-	// and every call would mint a fresh one).
+	// Prepended as the FIRST content element: IDs at the end of long responses
+	// can be truncated away by clients. Applied unconditionally otherwise: to
+	// error results (the retry after an error must carry the same session) and
+	// to tools that return no content at all (structured-only tools would
+	// otherwise never learn their session, and every call would mint a fresh
+	// one).
 	if text := agentcat.BuildMintBackText(resolution); text != "" {
-		cp.Content = append(cp.Content, mcp.NewTextContent(text))
+		cp.Content = append([]mcp.Content{mcp.NewTextContent(text)}, cp.Content...)
 	}
 
 	// (b) Structured mirror: persistent handle state on every response, gated
 	// on the output-injection registry, plain-object structuredContent only,
-	// customer's own _mcp_instructions key wins.
+	// customer's own mcp_session key wins.
 	mirror := agentcat.BuildHandleMirror(agentcat.MirrorInput{
 		Resolution: resolution,
 		AgentID:    agentID,
 	})
 	if mirror != nil && agentcat.ShouldMirror(toolName, reg) {
 		if sc, ok := structuredContentAsMap(res); ok {
-			if _, customerOwns := sc[agentcat.MCPInstructionsKey]; !customerOwns {
-				sc[agentcat.MCPInstructionsKey] = mirror
+			if _, customerOwns := sc[agentcat.MCPSessionKey]; !customerOwns {
+				sc[agentcat.MCPSessionKey] = mirror
 				cp.StructuredContent = sc
 				// The preserved wire bytes would otherwise win at marshal time.
 				clearRawStructuredContent(&cp)
@@ -361,8 +363,9 @@ func undecorateResult(res *mcp.CallToolResult) *mcp.CallToolResult {
 }
 
 // withoutMintBackBlocks drops every content block that is provably a mint-back
-// block this SDK appended. Position is not assumed: an outer middleware may
-// have appended content of its own after ours.
+// block this SDK prepended. Position is not assumed even though decorateResult
+// writes the block first: an outer middleware may have added content of its
+// own around ours.
 func withoutMintBackBlocks(content []mcp.Content) ([]mcp.Content, bool) {
 	dropped := false
 	kept := make([]mcp.Content, 0, len(content))
@@ -427,15 +430,16 @@ func isHandleChar(c byte) bool {
 		(c >= 'A' && c <= 'Z')
 }
 
-// withoutHandleMirror drops the _mcp_instructions entry when its value is
-// provably the mirror this SDK builds. A customer's own value under that key
-// is left alone: decorateResult never overwrites one, so it cannot be ours.
+// withoutHandleMirror drops the mcp_session entry when its value is provably
+// the {session_id?, agent_id?, status?} mirror this SDK builds. A customer's
+// own value under that key is left alone: decorateResult never overwrites
+// one, so it cannot be ours.
 func withoutHandleMirror(res *mcp.CallToolResult) (map[string]any, bool) {
 	structured, ok := structuredContentAsMap(res)
 	if !ok {
 		return nil, false
 	}
-	mirror, ok := structured[agentcat.MCPInstructionsKey].(map[string]any)
+	mirror, ok := structured[agentcat.MCPSessionKey].(map[string]any)
 	if !ok {
 		return nil, false
 	}
@@ -443,9 +447,9 @@ func withoutHandleMirror(res *mcp.CallToolResult) (map[string]any, bool) {
 	sessionID, _ := mirror[agentcat.ParamSessionID].(string)
 	agentID, _ := mirror[agentcat.ParamAgentID].(string)
 	// Try every resolution this SDK could have mirrored. Enumerating
-	// resolutions rather than a minted true/false pair keeps this honest as
-	// sources are added: invalid and hook both produce a mirror with no
-	// session_id key, and neither is reachable by naming an ID.
+	// resolutions rather than reading the status member keeps this honest as
+	// sources are added: invalid produces a mirror with no session_id key, and
+	// hook and foreign produce one with agent_id alone.
 	for _, res := range []agentcat.SessionResolution{
 		{SessionID: sessionID, Source: agentcat.SessionSourceMinted},
 		{SessionID: sessionID, Source: agentcat.SessionSourceSupplied},
@@ -454,7 +458,7 @@ func withoutHandleMirror(res *mcp.CallToolResult) (map[string]any, bool) {
 	} {
 		rebuilt := agentcat.BuildHandleMirror(agentcat.MirrorInput{Resolution: res, AgentID: agentID})
 		if reflect.DeepEqual(rebuilt, mirror) {
-			delete(structured, agentcat.MCPInstructionsKey)
+			delete(structured, agentcat.MCPSessionKey)
 			return structured, true
 		}
 	}

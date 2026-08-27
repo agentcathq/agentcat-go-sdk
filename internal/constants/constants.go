@@ -4,20 +4,17 @@
 // is the point. Do not reword without updating the cross-SDK copy spec.
 package constants
 
-import "fmt"
-
 // Injected parameter names and wire keys.
 const (
-	ParamSessionID     = "session_id"
-	ParamAgentID       = "agent_id"
-	ParamContext       = "context"
-	MCPInstructionsKey = "_mcp_instructions"
+	ParamSessionID = "session_id"
+	ParamAgentID   = "agent_id"
+	ParamContext   = "context"
 
-	// MirrorInstructionsKey is the member of the _mcp_instructions object that
-	// carries the agent-facing instruction text. Its siblings are named by
-	// ParamSessionID and ParamAgentID, so the mirror's shape and the injected
-	// parameter names cannot drift apart.
-	MirrorInstructionsKey = "instructions"
+	// MCPSessionKey is the structuredContent member carrying the handle
+	// mirror, and the property declared on extended output schemas. Its
+	// members are named by ParamSessionID, ParamAgentID, and the status enum
+	// owned by the inject package.
+	MCPSessionKey = "mcp_session"
 
 	MetaClientInfoKey      = "io.modelcontextprotocol/clientInfo"
 	MetaProtocolVersionKey = "io.modelcontextprotocol/protocolVersion"
@@ -43,52 +40,57 @@ const (
 	PrefixAgent   = "agt"
 )
 
-const SessionIDParamDescription = "REQUIRED on every call after your first. This MCP server associates all of your tool calls for a given task using session_id; a call that arrives without it cannot be associated with your earlier work and is treated as the start of an unrelated task, disconnected from the original goal. Omit it on your first call only — the server will issue one in the _mcp_instructions field of the result (or a trailing [MCP INSTRUCTIONS] text block) — then echo that exact value on every later call. Never invent a value, and do not issue parallel tool calls until the server has issued your session_id. One session_id covers the whole goal from start to finish: when you spawn subagents you MUST give them this same session_id, or their work is severed from yours. Without session_id, this server does not function as intended."
+const SessionIDParamDescription = "Session continuity handle, one of two values: the ses_ ID issued for the task underway, or start. This server cannot link your calls between requests on its own, so session continuity travels in this parameter instead. If you were handed a session_id for this task — for example by the agent that spawned you — send that exact value from your first call. Otherwise send start on your first call; the server will issue an opaque correlation ID in the mcp_session field of the result, or in a text block at the start of the result beginning [session_id issued. Then send that exact ses_ value on every later call and hand it to any subagents working the same task. start always begins a new, unrelated task — never send it mid-task. If you send a value this server does not recognize, the result reports it: mcp_session.status of unrecognized, or a text block beginning [session_id unrecognized; re-send the ID issued for this task, or start if none was issued yet. Never invent a ses_ value."
 
-const AgentIDParamDescription = "REQUIRED on every call, including your first. This MCP server distinguishes you from every other agent working this task using agent_id; a call that arrives without it cannot be attributed to you. Generate your own ID when you start work by joining three parts with '|': your model version, your harness name, and a short random suffix of 4-6 letters or digits chosen once. Example: opus-4.80-1m|claude-code|k3n9x. Send that same exact value on every call for your entire task; never change it mid-task. agent_id identifies you alone: a newly spawned subagent MUST generate its own instead of reusing its parent's. Without agent_id, this server does not function as intended."
+// SessionIDParamPattern is the JSON Schema pattern declared on the injected
+// session_id parameter. Its ses_ arm is exactly the shape both issuing paths
+// produce (KSUID: 27 base62 chars) — the same check handles.IsValidSessionID
+// applies — with the start sentinel as the only other member.
+const SessionIDParamPattern = "^(start|ses_[0-9A-Za-z]{27})$"
 
-const AgentIDParamDescriptionHookMode = "REQUIRED on every call, including your first. This MCP server distinguishes you from every other agent using agent_id; a call that arrives without it cannot be attributed to you. Generate your own ID when you start work by joining three parts with '|': your model version, your harness name, and a short random suffix of 4-6 letters or digits chosen once. Example: opus-4.80-1m|claude-code|k3n9x. Send that same exact value on every call for your entire task; never change it mid-task. agent_id identifies you alone: a newly spawned subagent MUST generate its own instead of reusing its parent's. Without agent_id, this server does not function as intended."
+// SessionStartSentinel is the session_id value that requests issuance: it
+// resolves exactly like an omitted session_id (matched case-insensitively;
+// the schema documents lowercase).
+const SessionStartSentinel = "start"
 
+// AgentIDParamDescription is the single agent_id description, used in both
+// prompted and hook mode.
+const AgentIDParamDescription = "Agent identity handle, required on every call including your first. This server cannot tell concurrent agents apart on its own; agent_id is how your calls are attributed to you. It is a self-chosen identifier in the spirit of a User-Agent string — join your model version, your harness name, and a short suffix of 4-6 letters or digits, with '|'. Example: opus-4.80-1m|claude-code|k3n9x. Choose the suffix once at the start of your task and send that same exact value on every call for the entire task; never change it mid-task, and a new task gets a fresh suffix. agent_id identifies exactly one agent and is never inherited: a subagent you spawn generates a new one rather than carrying yours, and if you were spawned by another agent, generate your own rather than reusing your parent's. A call without agent_id cannot be attributed to you."
+
+// Mint-back text block parts. The minted block is
+// MintBackHeaderIssued + "\n" + MintBackSessionLine(id) + "\n" + MintBackIssuedBody;
+// the unrecognized block is
+// MintBackHeaderUnrecognized + "\n" + MintBackUnrecognizedBody.
 const (
-	MintBackHeaderSession = "[MCP INSTRUCTIONS]: session_id issued."
-	MintBackHeaderInvalid = "[MCP INSTRUCTIONS]: session_id not recognized."
-	MintBackCloser        = "Without session_id, this server does not function as intended."
+	MintBackHeaderIssued       = "[session_id issued — see this tool's session_id parameter description]"
+	MintBackHeaderUnrecognized = "[session_id unrecognized — see this tool's session_id parameter description]"
 )
 
-// MintBackInvalidLine is the correction shown when the agent sends a
-// session_id this server never issued. Deliberately hands out NO replacement:
-// if a value arrived at all the agent was already issued a good one, and
-// giving it a second would split a conversation that was never split.
-const MintBackInvalidLine = "  The session_id you sent was not issued by this server. Re-send the exact session_id this server issued to you earlier in this conversation. Never invent a value."
+const MintBackIssuedBody = "This is the first-call issuance described in this tool's session_id parameter description."
 
-// MintBackSessionLine renders the middle line of the text mint-back block.
+// MintBackUnrecognizedBody names no session ID: no replacement is issued in
+// the same response. If a value arrived at all the agent was already issued a
+// good one, and handing it a second would split a conversation that was never
+// split; the recovery path is described in the body itself.
+const MintBackUnrecognizedBody = "The value sent was not issued by this server. Re-send the session_id issued earlier for this task; if none was issued yet, send start and one will be issued."
+
+// MintBackSessionLine renders the session_id line of the minted text block.
 func MintBackSessionLine(sessionID string) string {
-	return fmt.Sprintf("  session_id=%s — required on every subsequent tool call", sessionID)
+	return "session_id: " + sessionID
 }
 
-// MintBackConfirmed renders the structured-mirror instructions used when no
-// handle was minted this call. names is ["session_id"], ["agent_id"], or
-// ["session_id", "agent_id"] — in that order.
-func MintBackConfirmed(names []string) string {
-	joined := ""
-	for i, n := range names {
-		if i > 0 {
-			joined += " and "
-		}
-		joined += n
-	}
-	tail := "this exact value"
-	if len(names) > 1 {
-		tail = "these exact values"
-	}
-	return fmt.Sprintf("[MCP INSTRUCTIONS]: %s confirmed. Keep sending %s on every call.", joined, tail)
-}
+// mcp_session outputSchema copy: the field description per mode, and the
+// per-property descriptions. The status enum values live in the inject
+// package, which declares the enum alongside MCPSessionStatusDescription.
+const MCPSessionFieldDescription = "Session continuity and agent attribution state for this task, returned on completed responses that carry structured output. This server cannot link your calls between requests on its own, so session continuity travels here instead."
 
-const MCPInstructionsFieldDescription = "Your handles for this task, confirmed by this MCP server on every response, and the instructions for echoing them on later calls. Read and follow."
+const MCPSessionFieldDescriptionHookMode = "Agent attribution state for this task, returned on completed responses that carry structured output."
 
-const MCPInstructionsSessionIDDescription = "Echo this exact value as the session_id argument on every subsequent tool call."
+const MCPSessionSessionIDDescription = "Opaque correlation ID for this task, issued by this server. Use this as the session_id argument of every later call, and hand it to any subagents working the same task. Absent when status is unrecognized; no replacement is issued in that response — recovery is described under status."
 
-const MCPInstructionsAgentIDDescription = "Your agent_id as this server received it. Keep sending this exact value on every call; a subagent must generate its own."
+const MCPSessionAgentIDDescription = "Present only when you sent agent_id on this call. Your agent_id, echoed as received. Continue sending this exact value on every call; it is never inherited — a subagent you spawn generates its own."
+
+const MCPSessionStatusDescription = "issued: first call of a task; the session_id above was just created. active: the session_id you sent was accepted; keep sending it. unrecognized: the value sent was not issued by this server — re-send the one issued earlier for this task; if none was issued yet, send start to be issued a new one."
 
 // get_more_tools copy (unchanged from v1; pinned here as the single source).
 const (

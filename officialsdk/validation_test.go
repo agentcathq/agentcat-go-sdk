@@ -95,15 +95,15 @@ func TestInvalidSessionPublishesSessionless(t *testing.T) {
 		t.Errorf("raw arguments must still record what the agent sent, got %v", args)
 	}
 	// The agent is corrected on the wire...
-	if got := lastText(t, res); !strings.Contains(got, "session_id not recognized") {
-		t.Errorf("the agent was not corrected; last content = %q", got)
+	if got := firstText(t, res); !strings.Contains(got, "[session_id unrecognized") {
+		t.Errorf("the agent was not corrected; first content = %q", got)
 	}
 	// ...and the correction never reaches the published event.
-	if resp := fmt.Sprint(evt.Response); strings.Contains(resp, "not recognized") {
+	if resp := fmt.Sprint(evt.Response); strings.Contains(resp, "unrecognized") {
 		t.Errorf("the correction leaked into the published event: %s", resp)
 	}
 	// It must hand out NO replacement handle.
-	if strings.Contains(lastText(t, res), "session_id=ses_") {
+	if strings.Contains(firstText(t, res), "ses_") {
 		t.Error("the correction must not issue a replacement handle")
 	}
 }
@@ -155,7 +155,7 @@ func TestCustomerOwnedSessionParamIsForeign(t *testing.T) {
 	}
 	// Silence: no correction, no mint-back, no mirror.
 	raw, _ := json.Marshal(res)
-	if strings.Contains(string(raw), "MCP INSTRUCTIONS") || strings.Contains(string(raw), "_mcp_instructions") {
+	if strings.Contains(string(raw), "[session_id") || strings.Contains(string(raw), "mcp_session") {
 		t.Errorf("AgentCat must say nothing about a parameter that is not ours: %s", raw)
 	}
 }

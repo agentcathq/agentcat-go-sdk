@@ -384,11 +384,10 @@ func TestErrorHandling_Integration(t *testing.T) {
 		t.Error("Expected error result content")
 	}
 
-	// Check if error message is present in result
-	if textContent, ok := result.Content[0].(mcp.TextContent); ok {
-		if !strings.Contains(textContent.Text, "not found") {
-			t.Errorf("Expected error message about not found, got: %s", textContent.Text)
-		}
+	// Check if error message is present in result (resultText skips the
+	// SDK's own leading mint-back block).
+	if text := resultText(result); !strings.Contains(text, "not found") {
+		t.Errorf("Expected error message about not found, got: %s", text)
 	}
 
 	// Note: OnError hook is called for actual errors, not tool error results
@@ -616,10 +615,8 @@ func TestTrack_HooksFireOnToolCall_Integration(t *testing.T) {
 		t.Fatalf("CallTool failed: %v", err)
 	}
 
-	if tc, ok := result.Content[0].(mcp.TextContent); ok {
-		if tc.Text != "Hello, World" {
-			t.Errorf("Expected 'Hello, World', got '%s'", tc.Text)
-		}
+	if text := resultText(result); text != "Hello, World" {
+		t.Errorf("Expected 'Hello, World', got '%s'", text)
 	}
 }
 

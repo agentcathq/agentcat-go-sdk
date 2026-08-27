@@ -6,6 +6,8 @@ import (
 	"slices"
 	"strings"
 	"testing"
+
+	"go.agentcat.com/sdk/v2/internal/constants"
 )
 
 func mustParse(t *testing.T, s string) *SchemaObject {
@@ -44,11 +46,11 @@ func TestBuildOrderingAndRegistry(t *testing.T) {
 	if got := props.Keys(); strings.Join(got, ",") != strings.Join(wantOrder, ",") {
 		t.Errorf("property order = %v, want %v", got, wantOrder)
 	}
-	// session_id never required; agent_id and context appended to required.
+	// All three injected params append to required, customer entries first.
 	var required []string
 	rawReq, _ := out[0].InputSchema.Get("required")
 	_ = json.Unmarshal(rawReq, &required)
-	if strings.Join(required, ",") != "zebra,agent_id,context" {
+	if strings.Join(required, ",") != "zebra,session_id,agent_id,context" {
 		t.Errorf("required = %v", required)
 	}
 	if got := reg.InjectedParams["todo"]; strings.Join(got, ",") != "session_id,agent_id,context" {
@@ -73,13 +75,42 @@ func TestBuildHookModeSkipsSessionID(t *testing.T) {
 	if props.Has("session_id") {
 		t.Error("hook mode must not inject session_id")
 	}
-	// Hook-mode agent_id description differs from default mode.
+	// One agent_id description in both modes.
 	raw, _ := props.Get("agent_id")
-	if !strings.Contains(string(raw), "distinguishes you from every other agent using agent_id") {
-		t.Errorf("agent_id must use hook-mode description, got %s", raw)
+	if !strings.Contains(string(raw), "cannot tell concurrent agents apart on its own") {
+		t.Errorf("agent_id must use the single description in hook mode, got %s", raw)
 	}
 	if got := reg.InjectedParams["t"]; strings.Join(got, ",") != "agent_id,context" {
 		t.Errorf("registry = %v", got)
+	}
+	// agent_id stays required wherever it is injected, hook mode included.
+	var required []string
+	rawReq, _ := out[0].InputSchema.Get("required")
+	_ = json.Unmarshal(rawReq, &required)
+	if strings.Join(required, ",") != "agent_id,context" {
+		t.Errorf("required = %v", required)
+	}
+}
+
+// TestSessionIDParamCarriesPattern pins the machine-checkable half of the
+// session_id contract: the injected property declares the exact value pattern
+// (start, or an issued ses_ ID) so schema-enforcing clients validate before
+// sending. agent_id and context stay pattern-free.
+func TestSessionIDParamCarriesPattern(t *testing.T) {
+	out, _ := Build(defaultCfg(), []NormalizedTool{{
+		Name:        "t",
+		InputSchema: mustParse(t, `{"type":"object","properties":{}}`),
+	}})
+	props := propertiesOf(t, out[0].InputSchema)
+	raw, _ := props.Get("session_id")
+	if !strings.Contains(string(raw), constants.SessionIDParamPattern) {
+		t.Errorf("session_id must declare the value pattern, got %s", raw)
+	}
+	for _, name := range []string{"context"} {
+		raw, _ := props.Get(name)
+		if strings.Contains(string(raw), "pattern") {
+			t.Errorf("%s must not declare a pattern, got %s", name, raw)
+		}
 	}
 }
 
@@ -120,6 +151,13 @@ func TestBuildCollisionSkipsThatParamOnly(t *testing.T) {
 	if got := reg.InjectedParams["t"]; strings.Join(got, ",") != "context" {
 		t.Errorf("only context should be recorded, got %v", got)
 	}
+	// A customer-owned session_id is never forced required by this SDK.
+	var required []string
+	rawReq, _ := out[0].InputSchema.Get("required")
+	_ = json.Unmarshal(rawReq, &required)
+	if slices.Contains(required, "session_id") {
+		t.Errorf("customer-owned session_id must not join required, got %v", required)
+	}
 }
 
 func TestBuildOutputSchemaInjection(t *testing.T) {
@@ -130,17 +168,26 @@ func TestBuildOutputSchemaInjection(t *testing.T) {
 		{Name: "composed", InputSchema: mustParse(t, `{"type":"object","properties":{}}`),
 			OutputSchema: mustParse(t, `{"oneOf":[{"type":"object"}]}`)},
 		{Name: "customerkey", InputSchema: mustParse(t, `{"type":"object","properties":{}}`),
-			OutputSchema: mustParse(t, `{"type":"object","properties":{"_mcp_instructions":{"type":"string"}}}`)},
+			OutputSchema: mustParse(t, `{"type":"object","properties":{"mcp_session":{"type":"string"}}}`)},
 	})
 	if !reg.OutputInjected["declared"] {
 		t.Error("declared plain-object outputSchema must be extended")
 	}
 	oProps := propertiesOf(t, out[0].OutputSchema)
-	raw, _ := oProps.Get("_mcp_instructions")
-	for _, want := range []string{"Read and follow.", "session_id argument", "a subagent must generate its own"} {
+	raw, _ := oProps.Get("mcp_session")
+	for _, want := range []string{
+		"Session continuity and agent attribution state",
+		"Use this as the session_id argument",
+		`"enum":["issued","active","unrecognized"]`,
+		"keep sending it",
+	} {
 		if !strings.Contains(string(raw), want) {
-			t.Errorf("_mcp_instructions schema missing %q: %s", want, raw)
+			t.Errorf("mcp_session schema missing %q: %s", want, raw)
 		}
+	}
+	// defaultCfg has agent tracking off: no agent_id sub-property.
+	if strings.Contains(string(raw), `"agent_id"`) {
+		t.Errorf("agent_id must not be declared without agent tracking: %s", raw)
 	}
 	// Output additionalProperties:false must be preserved (declared property suffices).
 	if !out[0].OutputSchema.Has("additionalProperties") {
@@ -151,11 +198,83 @@ func TestBuildOutputSchemaInjection(t *testing.T) {
 			t.Errorf("%s must not be in the output registry", name)
 		}
 	}
-	// Customer's own _mcp_instructions declaration wins, untouched.
+	// Customer's own mcp_session declaration wins, untouched.
 	cProps := propertiesOf(t, out[3].OutputSchema)
-	raw, _ = cProps.Get("_mcp_instructions")
+	raw, _ = cProps.Get("mcp_session")
 	if string(raw) != `{"type":"string"}` {
-		t.Errorf("customer _mcp_instructions changed: %s", raw)
+		t.Errorf("customer mcp_session changed: %s", raw)
+	}
+}
+
+// TestOutputSchemaPropertiesAreModeConditional pins the mcp_session fragment's
+// shape per mode: session_id and status exist only in prompted mode, agent_id
+// only when agent tracking is on, in the order session_id, agent_id, status.
+func TestOutputSchemaPropertiesAreModeConditional(t *testing.T) {
+	tool := func() NormalizedTool {
+		return NormalizedTool{
+			Name:         "t",
+			InputSchema:  mustParse(t, `{"type":"object","properties":{}}`),
+			OutputSchema: mustParse(t, `{"type":"object","properties":{}}`),
+		}
+	}
+	field := func(cfg Config) *SchemaObject {
+		t.Helper()
+		out, reg := Build(cfg, []NormalizedTool{tool()})
+		if !reg.OutputInjected["t"] {
+			t.Fatal("output schema must be extended")
+		}
+		raw, ok := propertiesOf(t, out[0].OutputSchema).Get("mcp_session")
+		if !ok {
+			t.Fatal("mcp_session must be declared")
+		}
+		return mustParse(t, string(raw))
+	}
+
+	prompted := field(Config{InjectHandles: true, AgentTracking: true})
+	if desc, _ := prompted.Get("description"); !strings.Contains(string(desc), "session continuity travels here instead") {
+		t.Errorf("prompted mode must use the prompted field description, got %s", desc)
+	}
+	if got := propertiesOf(t, prompted).Keys(); strings.Join(got, ",") != "session_id,agent_id,status" {
+		t.Errorf("prompted+tracking properties = %v, want [session_id agent_id status]", got)
+	}
+
+	hook := field(Config{InjectHandles: true, HookMode: true, AgentTracking: true})
+	if desc, _ := hook.Get("description"); !strings.Contains(string(desc), "Agent attribution state for this task") {
+		t.Errorf("hook mode must use the hook-mode field description, got %s", desc)
+	}
+	if got := propertiesOf(t, hook).Keys(); strings.Join(got, ",") != "agent_id" {
+		t.Errorf("hook-mode properties = %v, want [agent_id]", got)
+	}
+
+	// Hook mode with agent tracking OFF: no sub-property would exist and
+	// BuildMirror can never produce a payload in that mode, so the field is
+	// not declared at all — the schema passes through untouched and the tool
+	// never enters the output-injection registry (parity with the TypeScript
+	// and Python SDKs, which skip the handle pass entirely there).
+	outD, regD := Build(Config{InjectHandles: true, HookMode: true}, []NormalizedTool{tool()})
+	if regD.OutputInjected["t"] {
+		t.Error("hook mode without agent tracking must not extend the output schema")
+	}
+	if got := marshalStr(t, outD[0].OutputSchema); got != `{"type":"object","properties":{}}` {
+		t.Errorf("hook mode without agent tracking must leave the output schema untouched, got %s", got)
+	}
+
+	statusRaw, ok := propertiesOf(t, prompted).Get("status")
+	if !ok {
+		t.Fatal("prompted mode must declare status")
+	}
+	var status struct {
+		Enum        []string `json:"enum"`
+		Description string   `json:"description"`
+	}
+	if err := json.Unmarshal(statusRaw, &status); err != nil {
+		t.Fatalf("status schema: %v", err)
+	}
+	if strings.Join(status.Enum, ",") != "issued,active,unrecognized" {
+		t.Errorf("status enum = %v", status.Enum)
+	}
+	if !strings.Contains(status.Description, "re-send the one issued earlier for this task") {
+		t.Errorf("status description drifted: %q", status.Description)
 	}
 }
 
@@ -235,7 +354,7 @@ func TestBuildIsIdempotent(t *testing.T) {
 	var required []string
 	rawReq, _ := twice[0].InputSchema.Get("required")
 	_ = json.Unmarshal(rawReq, &required)
-	if strings.Join(required, ",") != "q,agent_id,context" {
+	if strings.Join(required, ",") != "q,session_id,agent_id,context" {
 		t.Errorf("required must not accumulate duplicates, got %v", required)
 	}
 }

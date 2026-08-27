@@ -140,6 +140,12 @@ func ResolveSessionHandle(args map[string]any, hook func() (string, error), proj
 		// stray whitespace still means the ID it was given, and the
 		// TypeScript SDK trims here too.
 		supplied := strings.TrimSpace(raw)
+		if strings.EqualFold(supplied, constants.SessionStartSentinel) {
+			// The start sentinel requests issuance and resolves exactly like an
+			// omitted session_id. EqualFold as grace for clients that do not
+			// enforce the schema pattern; the pattern documents lowercase.
+			return SessionResolution{SessionID: MintSessionID(), Source: SessionSourceMinted}
+		}
 		if IsValidSessionID(supplied) {
 			return SessionResolution{SessionID: supplied, Source: SessionSourceSupplied}
 		}
@@ -190,8 +196,9 @@ func ClampAgentID(v string) string {
 	return v
 }
 
-// BuildMintBackText renders the trailing [MCP INSTRUCTIONS] text block for one
-// call, or "" when there is nothing to say.
+// BuildMintBackText renders the leading text block for one call, or "" when
+// there is nothing to say. The block goes at the START of the result content:
+// IDs at the end of long responses can be truncated away by clients.
 //
 // Taking the whole resolution rather than an ID is deliberate: this is the one
 // place that decides whether a call announces anything at all. Both adapters
@@ -209,13 +216,12 @@ func BuildMintBackText(res SessionResolution) string {
 	}
 	switch res.Source {
 	case SessionSourceMinted:
-		return constants.MintBackHeaderSession + "\n" +
+		return constants.MintBackHeaderIssued + "\n" +
 			constants.MintBackSessionLine(res.SessionID) + "\n" +
-			constants.MintBackCloser
+			constants.MintBackIssuedBody
 	case SessionSourceInvalid:
-		return constants.MintBackHeaderInvalid + "\n" +
-			constants.MintBackInvalidLine + "\n" +
-			constants.MintBackCloser
+		return constants.MintBackHeaderUnrecognized + "\n" +
+			constants.MintBackUnrecognizedBody
 	default:
 		return ""
 	}

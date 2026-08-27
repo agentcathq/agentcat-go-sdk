@@ -47,7 +47,7 @@ func newValidatingServer(t *testing.T) *server.MCPServer {
 }
 
 // TestMirrorSurvivesOutputSchemaValidation is the regression pin for the
-// closed-output-schema break: the mirror adds _mcp_instructions to
+// closed-output-schema break: the mirror adds mcp_session to
 // structuredContent, and mcp-go validates the decorated result against the
 // tool's REGISTERED output schema, so that property must be declared there.
 func TestMirrorSurvivesOutputSchemaValidation(t *testing.T) {
@@ -64,7 +64,7 @@ func TestMirrorSurvivesOutputSchemaValidation(t *testing.T) {
 	if !ok {
 		t.Fatalf("structuredContent = %T, want a JSON object", res.StructuredContent)
 	}
-	mi, ok := sc["_mcp_instructions"].(map[string]any)
+	mi, ok := sc["mcp_session"].(map[string]any)
 	if !ok {
 		t.Fatalf("mirror missing from structuredContent: %v", sc)
 	}
@@ -75,7 +75,7 @@ func TestMirrorSurvivesOutputSchemaValidation(t *testing.T) {
 		t.Errorf("customer payload lost: %v", sc)
 	}
 	// Wire-only: the published event carries the undecorated result.
-	if strings.Contains(fmt.Sprint(evt.Response), "_mcp_instructions") {
+	if strings.Contains(fmt.Sprint(evt.Response), "mcp_session") {
 		t.Errorf("mirror leaked into the published event: %v", evt.Response)
 	}
 }
@@ -94,8 +94,8 @@ func TestRegisteredOutputSchemaDeclaresMirror(t *testing.T) {
 	schema := marshalRegisteredOutputSchema(t, registered.Tool)
 
 	props, _ := schema["properties"].(map[string]any)
-	if _, has := props["_mcp_instructions"]; !has {
-		t.Errorf("registered output schema must declare _mcp_instructions: %v", schema)
+	if _, has := props["mcp_session"]; !has {
+		t.Errorf("registered output schema must declare mcp_session: %v", schema)
 	}
 	if _, has := props["text"]; !has {
 		t.Errorf("customer properties must survive: %v", schema)
@@ -105,8 +105,8 @@ func TestRegisteredOutputSchemaDeclaresMirror(t *testing.T) {
 	}
 	required, _ := schema["required"].([]any)
 	for _, name := range required {
-		if name == "_mcp_instructions" {
-			t.Error("_mcp_instructions must be optional, never required")
+		if name == "mcp_session" {
+			t.Error("mcp_session must be optional, never required")
 		}
 	}
 
@@ -174,7 +174,7 @@ func TestRegisteredOutputSchemaDeclarationIsIdempotent(t *testing.T) {
 	if res.IsError {
 		t.Fatalf("call failed after repeated declaration passes: %q", resultText(res))
 	}
-	if sc, ok := res.StructuredContent.(map[string]any); !ok || sc["_mcp_instructions"] == nil {
+	if sc, ok := res.StructuredContent.(map[string]any); !ok || sc["mcp_session"] == nil {
 		t.Errorf("mirror stopped firing after repeated passes: %v", res.StructuredContent)
 	}
 }
@@ -233,20 +233,20 @@ func TestLiveRegisteredTools_ReadsPrivateToolState(t *testing.T) {
 }
 
 // TestCustomerDeclaredInstructionsPropertyIsPreserved pins that a customer who
-// already declares _mcp_instructions keeps their own definition.
+// already declares mcp_session keeps their own definition.
 func TestCustomerDeclaredInstructionsPropertyIsPreserved(t *testing.T) {
-	const customerSchema = `{"type":"object","properties":{"text":{"type":"string"},"_mcp_instructions":{"type":"string","description":"mine"}}}`
+	const customerSchema = `{"type":"object","properties":{"text":{"type":"string"},"mcp_session":{"type":"string","description":"mine"}}}`
 
 	mcpServer := server.NewMCPServer("customer-owned-server", "1.0.0",
 		server.WithToolCapabilities(true),
 	)
 	mcpServer.AddTool(
 		mcp.NewTool("owns_instructions",
-			mcp.WithDescription("Declares _mcp_instructions itself"),
+			mcp.WithDescription("Declares mcp_session itself"),
 			mcp.WithRawOutputSchema(json.RawMessage(customerSchema)),
 		),
 		func(ctx context.Context, request mcp.CallToolRequest) (*mcp.CallToolResult, error) {
-			return &mcp.CallToolResult{StructuredContent: map[string]any{"text": "t", "_mcp_instructions": "mine"}}, nil
+			return &mcp.CallToolResult{StructuredContent: map[string]any{"text": "t", "mcp_session": "mine"}}, nil
 		},
 	)
 
@@ -255,15 +255,15 @@ func TestCustomerDeclaredInstructionsPropertyIsPreserved(t *testing.T) {
 
 	schema := marshalRegisteredOutputSchema(t, mcpServer.ListTools()["owns_instructions"].Tool)
 	props, _ := schema["properties"].(map[string]any)
-	own, _ := props["_mcp_instructions"].(map[string]any)
+	own, _ := props["mcp_session"].(map[string]any)
 	if own["description"] != "mine" {
-		t.Errorf("customer's own _mcp_instructions definition must win: %v", props)
+		t.Errorf("customer's own mcp_session definition must win: %v", props)
 	}
 
 	res, _ := h.call("owns_instructions", map[string]any{"session_id": sid("c")})
 	sc, _ := res.StructuredContent.(map[string]any)
-	if sc["_mcp_instructions"] != "mine" {
-		t.Errorf("customer's own value must win at runtime, got %v", sc["_mcp_instructions"])
+	if sc["mcp_session"] != "mine" {
+		t.Errorf("customer's own value must win at runtime, got %v", sc["mcp_session"])
 	}
 }
 
@@ -322,7 +322,7 @@ func TestSessionScopedToolGetsMirrorDeclaration(t *testing.T) {
 	if !ok {
 		t.Fatalf("structuredContent = %T, want a JSON object", res.StructuredContent)
 	}
-	if _, has := sc["_mcp_instructions"]; !has {
+	if _, has := sc["mcp_session"]; !has {
 		t.Errorf("session-scoped tools must mirror handles too: %v", sc)
 	}
 	if sc["text"] != "session payload" {
@@ -339,11 +339,11 @@ func TestSessionScopedToolGetsMirrorDeclaration(t *testing.T) {
 }
 
 // TestCustomerTypedInstructionsPropertyIsNotMirrored pins the unpopulated
-// case: a customer who declares `_mcp_instructions` with a shape of their own
+// case: a customer who declares `mcp_session` with a shape of their own
 // must not have AgentCat's object written into it. Doing so would violate their
 // declared schema — under output validation the call would fail outright.
 func TestCustomerTypedInstructionsPropertyIsNotMirrored(t *testing.T) {
-	const customerSchema = `{"type":"object","properties":{"text":{"type":"string"},"_mcp_instructions":{"type":"string"}},"additionalProperties":false}`
+	const customerSchema = `{"type":"object","properties":{"text":{"type":"string"},"mcp_session":{"type":"string"}},"additionalProperties":false}`
 
 	mcpServer := server.NewMCPServer("customer-typed-server", "1.0.0",
 		server.WithToolCapabilities(true),
@@ -351,7 +351,7 @@ func TestCustomerTypedInstructionsPropertyIsNotMirrored(t *testing.T) {
 	)
 	mcpServer.AddTool(
 		mcp.NewTool("typed_instructions",
-			mcp.WithDescription("Declares _mcp_instructions as a string and never fills it"),
+			mcp.WithDescription("Declares mcp_session as a string and never fills it"),
 			mcp.WithRawOutputSchema(json.RawMessage(customerSchema)),
 		),
 		func(ctx context.Context, request mcp.CallToolRequest) (*mcp.CallToolResult, error) {
@@ -370,7 +370,7 @@ func TestCustomerTypedInstructionsPropertyIsNotMirrored(t *testing.T) {
 	if !ok {
 		t.Fatalf("structuredContent = %T, want a JSON object", res.StructuredContent)
 	}
-	if _, has := sc["_mcp_instructions"]; has {
+	if _, has := sc["mcp_session"]; has {
 		t.Errorf("AgentCat must not fill a property the customer typed itself: %v", sc)
 	}
 }

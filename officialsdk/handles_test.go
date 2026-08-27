@@ -55,7 +55,8 @@ func callToolOn(t *testing.T, cs *mcp.ClientSession, mock *mockPublisher, name s
 	return res, events[before]
 }
 
-// lastText returns the text of the final content block of a result.
+// lastText returns the text of the final content block of a result — where
+// the customer's own text sits once this SDK prepends its mint-back block.
 func lastText(t *testing.T, res *mcp.CallToolResult) string {
 	t.Helper()
 	if len(res.Content) == 0 {
@@ -64,6 +65,20 @@ func lastText(t *testing.T, res *mcp.CallToolResult) string {
 	tc, ok := res.Content[len(res.Content)-1].(*mcp.TextContent)
 	if !ok {
 		t.Fatalf("last content block is %T, want *mcp.TextContent", res.Content[len(res.Content)-1])
+	}
+	return tc.Text
+}
+
+// firstText returns the text of the FIRST content block of a result — the
+// position where this SDK prepends its mint-back block.
+func firstText(t *testing.T, res *mcp.CallToolResult) string {
+	t.Helper()
+	if len(res.Content) == 0 {
+		t.Fatal("result has no content")
+	}
+	tc, ok := res.Content[0].(*mcp.TextContent)
+	if !ok {
+		t.Fatalf("first content block is %T, want *mcp.TextContent", res.Content[0])
 	}
 	return tc.Text
 }
@@ -108,16 +123,17 @@ func TestCallMintsSessionAndMintsBack(t *testing.T) {
 		"context": "adding my first todo",
 	})
 
-	// 1. The wire response carries the trailing mint-back text block…
-	if got := lastText(t, res); !strings.HasPrefix(got, "[MCP INSTRUCTIONS]: session_id issued.") {
-		t.Errorf("missing mint-back block, last content = %q", got)
+	// 1. The wire response carries the leading mint-back text block as its
+	// FIRST content element…
+	if got := firstText(t, res); !strings.HasPrefix(got, "[session_id issued") {
+		t.Errorf("missing mint-back block, first content = %q", got)
 	}
 	// …and the published event does NOT (wire-only discipline).
 	resp := fmt.Sprint(evt.Response)
-	if strings.Contains(resp, "MCP INSTRUCTIONS") {
+	if strings.Contains(resp, "[session_id") {
 		t.Errorf("mint-back leaked into the published event response: %s", resp)
 	}
-	if strings.Contains(resp, "_mcp_instructions") {
+	if strings.Contains(resp, "mcp_session") {
 		t.Errorf("mirror leaked into the published event response: %s", resp)
 	}
 
@@ -129,7 +145,7 @@ func TestCallMintsSessionAndMintsBack(t *testing.T) {
 	if evt.Tags == nil || (*evt.Tags)["agentcat_session_id_source"] != "minted" {
 		t.Errorf("session source tag missing or wrong: %v", evt.Tags)
 	}
-	if !strings.Contains(lastText(t, res), evt.GetSessionId()) {
+	if !strings.Contains(firstText(t, res), evt.GetSessionId()) {
 		t.Error("mint-back text does not name the event's session id")
 	}
 
@@ -149,6 +165,29 @@ func TestCallMintsSessionAndMintsBack(t *testing.T) {
 	_, evt2 := callToolOn(t, cs, mock, "add_todo", map[string]any{"title": "again", "context": "x"})
 	if evt2.GetSessionId() == evt.GetSessionId() {
 		t.Error("two mint calls must mint distinct sessions (stateless per call)")
+	}
+}
+
+// TestStartSentinelMintsLikeOmission pins the start value's contract: it
+// resolves exactly like a first call that sent nothing — mint, issued block —
+// and the literal value is never adopted as a session.
+func TestStartSentinelMintsLikeOmission(t *testing.T) {
+	server, _, mock := createFullTestServerWithTracking(t, nil)
+	cs := connectClient(t, server)
+
+	res, evt := callToolOn(t, cs, mock, "add_todo", map[string]any{"title": "hi", "session_id": "start"})
+	if got := firstText(t, res); !strings.HasPrefix(got, "[session_id issued") {
+		t.Errorf("start must be issued a session, first content = %q", got)
+	}
+	if !strings.HasPrefix(evt.GetSessionId(), "ses_") {
+		t.Errorf("sessionId = %q, want a minted ses_ id", evt.GetSessionId())
+	}
+	if evt.Tags == nil || (*evt.Tags)["agentcat_session_id_source"] != "minted" {
+		t.Errorf("session source tag must be minted, got %v", evt.Tags)
+	}
+	args, _ := evt.Parameters["arguments"].(map[string]any)
+	if args["session_id"] != "start" {
+		t.Errorf("raw arguments must record the sentinel, got %v", args)
 	}
 }
 
@@ -183,8 +222,8 @@ func TestErrorResultsStillGetMintBack(t *testing.T) {
 	if !res.IsError {
 		t.Fatal("fixture tool must return an IsError result")
 	}
-	if got := lastText(t, res); !strings.Contains(got, "session_id issued") {
-		t.Errorf("mint-back must be appended to isError results too, got %q", got)
+	if got := firstText(t, res); !strings.Contains(got, "session_id issued") {
+		t.Errorf("mint-back must be prepended to isError results too, got %q", got)
 	}
 	if evt.IsError == nil || !*evt.IsError {
 		t.Error("event must record the tool error")
@@ -202,15 +241,15 @@ func TestMintBackReachesToolsThatReturnNoContent(t *testing.T) {
 
 	res, evt := callToolOn(t, cs, mock, "structured_only", map[string]any{})
 
-	if got := lastText(t, res); !strings.Contains(got, "session_id issued") {
-		t.Errorf("mint-back must be appended to content-less results too, got %q", got)
+	if got := firstText(t, res); !strings.Contains(got, "session_id issued") {
+		t.Errorf("mint-back must be prepended to content-less results too, got %q", got)
 	}
-	if !strings.Contains(lastText(t, res), evt.GetSessionId()) {
+	if !strings.Contains(firstText(t, res), evt.GetSessionId()) {
 		t.Error("mint-back text does not name the event's session id")
 	}
 	// Wire-only: the published event carries the customer's original result.
 	resp := fmt.Sprint(evt.Response)
-	if strings.Contains(resp, "MCP INSTRUCTIONS") || strings.Contains(resp, "_mcp_instructions") {
+	if strings.Contains(resp, "[session_id") || strings.Contains(resp, "mcp_session") {
 		t.Errorf("decoration leaked into the published event response: %s", resp)
 	}
 }
@@ -233,37 +272,37 @@ func TestStructuredMirror(t *testing.T) {
 	if !ok {
 		t.Fatalf("structuredContent = %T, want a JSON object", res.StructuredContent)
 	}
-	mi, ok := sc["_mcp_instructions"].(map[string]any)
+	mi, ok := sc["mcp_session"].(map[string]any)
 	if !ok {
 		t.Fatalf("mirror missing from structuredContent: %v", sc)
 	}
 	if mi["session_id"] != sid("s") {
 		t.Errorf("mirror must re-confirm supplied handles on every response, got %v", mi["session_id"])
 	}
-	if instr, _ := mi["instructions"].(string); !strings.Contains(instr, "confirmed") {
-		t.Errorf("supplied handles get the confirmed copy, got %q", instr)
+	if status, _ := mi["status"].(string); status != "active" {
+		t.Errorf("supplied handles get the active status, got %q", status)
 	}
 	// The customer's own structured payload survives alongside the mirror.
 	if sc["text"] == nil {
 		t.Errorf("customer structured payload lost: %v", sc)
 	}
 	// Event purity: the published response carries no mirror.
-	if strings.Contains(fmt.Sprint(evt.Response), "_mcp_instructions") {
+	if strings.Contains(fmt.Sprint(evt.Response), "mcp_session") {
 		t.Error("mirror leaked into the published event")
 	}
 
 	// A minted call mirrors the new session with the full issued-session copy.
 	res2, evt2 := callToolOn(t, cs, mock, "add_todo", map[string]any{"title": "y"})
 	sc2, _ := res2.StructuredContent.(map[string]any)
-	mi2, ok := sc2["_mcp_instructions"].(map[string]any)
+	mi2, ok := sc2["mcp_session"].(map[string]any)
 	if !ok {
 		t.Fatalf("mirror missing on minted call: %v", sc2)
 	}
 	if mi2["session_id"] != evt2.GetSessionId() {
 		t.Errorf("mirror session %v != event session %q", mi2["session_id"], evt2.GetSessionId())
 	}
-	if instr, _ := mi2["instructions"].(string); !strings.Contains(instr, "session_id issued") {
-		t.Errorf("minted mirror must carry the issued-session instructions, got %q", instr)
+	if status, _ := mi2["status"].(string); status != "issued" {
+		t.Errorf("minted mirror must carry the issued status, got %q", status)
 	}
 }
 
@@ -303,7 +342,7 @@ func TestStructuredMirrorPreservesNumbersOnTheWire(t *testing.T) {
 	if err != nil {
 		t.Fatalf("marshal wire result: %v", err)
 	}
-	if !strings.Contains(string(wire), "_mcp_instructions") {
+	if !strings.Contains(string(wire), "mcp_session") {
 		t.Fatalf("mirror did not fire, so number fidelity is untested: %s", wire)
 	}
 	for _, want := range []string{
@@ -330,7 +369,7 @@ func TestNoMirrorForToolsWithoutDeclaredOutputSchema(t *testing.T) {
 	res, _ := callToolOn(t, cs, mock, "echo_args", map[string]any{"payload": "p", "context": "c"})
 	if res.StructuredContent != nil {
 		if sc, ok := res.StructuredContent.(map[string]any); ok {
-			if _, has := sc["_mcp_instructions"]; has {
+			if _, has := sc["mcp_session"]; has {
 				t.Error("mirror must be gated on the output-injection registry")
 			}
 		}
@@ -358,12 +397,12 @@ func TestHookMode(t *testing.T) {
 	}
 	// No session instructions ever: neither text block nor structured mirror.
 	for _, c := range res.Content {
-		if tc, ok := c.(*mcp.TextContent); ok && strings.Contains(tc.Text, "MCP INSTRUCTIONS") {
+		if tc, ok := c.(*mcp.TextContent); ok && strings.Contains(tc.Text, "[session_id") {
 			t.Errorf("hook mode shows no session instructions ever, got %q", tc.Text)
 		}
 	}
 	if sc, ok := res.StructuredContent.(map[string]any); ok {
-		if _, has := sc["_mcp_instructions"]; has {
+		if _, has := sc["mcp_session"]; has {
 			t.Error("hook mode must not mirror handles")
 		}
 	}
@@ -402,7 +441,7 @@ func TestHookModeErrorMintsSilently(t *testing.T) {
 	}
 	// Silent means silent: no instructions reach the agent even for the mint.
 	for _, c := range res.Content {
-		if tc, ok := c.(*mcp.TextContent); ok && strings.Contains(tc.Text, "MCP INSTRUCTIONS") {
+		if tc, ok := c.(*mcp.TextContent); ok && strings.Contains(tc.Text, "[session_id") {
 			t.Errorf("hook mode shows no session instructions even on silent mint, got %q", tc.Text)
 		}
 	}
@@ -633,12 +672,12 @@ func TestDisableTracingNoMintBackNoEvents(t *testing.T) {
 		t.Fatal("call must succeed with tracing disabled")
 	}
 	for _, c := range res.Content {
-		if tc, ok := c.(*mcp.TextContent); ok && strings.Contains(tc.Text, "MCP INSTRUCTIONS") {
+		if tc, ok := c.(*mcp.TextContent); ok && strings.Contains(tc.Text, "[session_id") {
 			t.Error("no mint-back when tracing is disabled")
 		}
 	}
 	if sc, ok := res.StructuredContent.(map[string]any); ok {
-		if _, has := sc["_mcp_instructions"]; has {
+		if _, has := sc["mcp_session"]; has {
 			t.Error("no mirror when tracing is disabled")
 		}
 	}

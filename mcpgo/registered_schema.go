@@ -33,7 +33,7 @@ import (
 //   - OUTPUT: mcp-go validates a result against the registered output schema
 //     AFTER the middleware has run (server/server.go:2021), and
 //     mcp.WithOutputSchema[T] emits "additionalProperties": false, so the
-//     structured mirror needs `_mcp_instructions` declared there.
+//     structured mirror needs `mcp_session` declared there.
 //
 // A declared property satisfies a closed schema, so `additionalProperties` is
 // deliberately left exactly as the customer set it on both halves.

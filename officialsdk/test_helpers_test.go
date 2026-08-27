@@ -25,7 +25,7 @@ func sid(label string) string {
 	return "ses_" + (b.String() + strings.Repeat("0", 27))[:27]
 }
 
-// mintBackFor renders the [MCP INSTRUCTIONS] block this SDK appends on the
+// mintBackFor renders the text block this SDK prepends on the
 // call that minted sessionID. Tests assert against the real generator rather
 // than a copied literal, so a copy change cannot pass here and fail on the
 // wire.

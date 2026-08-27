@@ -144,7 +144,7 @@ func TestFactoryTopologyRebuildOnDemand(t *testing.T) {
 	if !strings.HasPrefix(minted, "ses_") {
 		t.Fatalf("expected a minted ses_ session, got %q", minted)
 	}
-	if got := lastText(t, res); got != mintBackFor(minted) {
+	if got := firstText(t, res); got != mintBackFor(minted) {
 		t.Errorf("mint-back missing or wrong on the rebuilt instance:\n got:  %q\n want: %q",
 			got, mintBackFor(minted))
 	}
@@ -207,7 +207,7 @@ func TestFactoryTopologyRebuildGatesTheMirror(t *testing.T) {
 	if !ok {
 		t.Fatalf("structured content = %T, want map", res.StructuredContent)
 	}
-	if _, has := sc[agentcat.MCPInstructionsKey]; has {
+	if _, has := sc[agentcat.MCPSessionKey]; has {
 		t.Error("structured_only declares no output schema: the rebuilt registry must keep the mirror off")
 	}
 	if sc["ok"] != true {
@@ -261,9 +261,11 @@ func decodeEchoedArgs(t *testing.T, res *mcp.CallToolResult) map[string]any {
 	if len(res.Content) == 0 {
 		t.Fatal("echo_args returned no content")
 	}
-	tc, ok := res.Content[0].(*mcp.TextContent)
+	// The customer's own text is the LAST block (a mint-back, when present,
+	// is prepended as the first).
+	tc, ok := res.Content[len(res.Content)-1].(*mcp.TextContent)
 	if !ok {
-		t.Fatalf("echo content = %T, want *mcp.TextContent", res.Content[0])
+		t.Fatalf("echo content = %T, want *mcp.TextContent", res.Content[len(res.Content)-1])
 	}
 	var echoed map[string]any
 	if err := json.Unmarshal([]byte(tc.Text), &echoed); err != nil {

@@ -59,8 +59,6 @@ func TestStripFallbackWithoutRegistry(t *testing.T) {
 func TestBuildHandleMirror(t *testing.T) {
 	id := sid("A")
 	const agent = "opus|cc|k3n9x"
-	issued := handles.BuildMintBackText(handles.SessionResolution{SessionID: id, Source: handles.SessionSourceMinted})
-	corrected := handles.BuildMintBackText(handles.SessionResolution{Source: handles.SessionSourceInvalid})
 
 	for _, c := range []struct {
 		name        string
@@ -68,52 +66,64 @@ func TestBuildHandleMirror(t *testing.T) {
 		wantNil     bool
 		wantSession string // "" = the session_id key must be ABSENT
 		wantAgent   string // "" = the agent_id key must be ABSENT
-		wantInstr   string
+		wantStatus  string // "" = the status key must be ABSENT
 	}{
 		{
 			name:        "minted: announce the handle",
 			in:          MirrorInput{Resolution: handles.SessionResolution{SessionID: id, Source: handles.SessionSourceMinted}},
-			wantSession: id, wantInstr: issued,
+			wantSession: id, wantStatus: "issued",
 		},
 		{
-			name:        "supplied: confirm it",
+			name:        "supplied: active",
 			in:          MirrorInput{Resolution: handles.SessionResolution{SessionID: id, Source: handles.SessionSourceSupplied}},
-			wantSession: id, wantInstr: "[MCP INSTRUCTIONS]: session_id confirmed. Keep sending this exact value on every call.",
+			wantSession: id, wantStatus: "active",
 		},
 		{
-			name:        "supplied with agent: confirm both",
+			name:        "supplied with agent: both handles",
 			in:          MirrorInput{Resolution: handles.SessionResolution{SessionID: id, Source: handles.SessionSourceSupplied}, AgentID: agent},
-			wantSession: id, wantAgent: agent,
-			wantInstr: "[MCP INSTRUCTIONS]: session_id and agent_id confirmed. Keep sending these exact values on every call.",
+			wantSession: id, wantAgent: agent, wantStatus: "active",
 		},
 		{
-			// The correction, and NO session_id key: echoing back a value we
-			// rejected would confirm an ID this server never issued.
-			name:      "invalid: correct, name no session",
-			in:        MirrorInput{Resolution: handles.SessionResolution{Source: handles.SessionSourceInvalid}},
-			wantInstr: corrected,
+			// NO session_id key: echoing back a value we rejected would
+			// confirm an ID this server never issued.
+			name:       "invalid: unrecognized, name no session",
+			in:         MirrorInput{Resolution: handles.SessionResolution{Source: handles.SessionSourceInvalid}},
+			wantStatus: "unrecognized",
 		},
 		{
-			name:      "invalid with agent: correct, keep the agent",
-			in:        MirrorInput{Resolution: handles.SessionResolution{Source: handles.SessionSourceInvalid}, AgentID: agent},
-			wantAgent: agent, wantInstr: corrected,
+			name:       "invalid with agent: unrecognized, keep the agent",
+			in:         MirrorInput{Resolution: handles.SessionResolution{Source: handles.SessionSourceInvalid}, AgentID: agent},
+			wantAgent:  agent,
+			wantStatus: "unrecognized",
 		},
 		{
-			// Not ours to speak about, even when an agent_id did arrive.
-			name:    "foreign: mirror nothing",
-			in:      MirrorInput{Resolution: handles.SessionResolution{Source: handles.SessionSourceForeign}, AgentID: agent},
+			// The session parameter is the customer's, so no session state is
+			// named — but the agent's own handle is still echoed.
+			name:      "foreign with agent: agent only",
+			in:        MirrorInput{Resolution: handles.SessionResolution{Source: handles.SessionSourceForeign}, AgentID: agent},
+			wantAgent: agent,
+		},
+		{
+			name:    "foreign alone: nothing to mirror",
+			in:      MirrorInput{Resolution: handles.SessionResolution{Source: handles.SessionSourceForeign}},
 			wantNil: true,
 		},
 		{
 			name:      "hook with agent: agent only",
 			in:        MirrorInput{Resolution: handles.SessionResolution{SessionID: id, Source: handles.SessionSourceHook, HookMode: true}, AgentID: agent},
 			wantAgent: agent,
-			wantInstr: "[MCP INSTRUCTIONS]: agent_id confirmed. Keep sending this exact value on every call.",
 		},
 		{
 			name:    "hook alone: nothing to mirror",
 			in:      MirrorInput{Resolution: handles.SessionResolution{SessionID: id, Source: handles.SessionSourceHook, HookMode: true}},
 			wantNil: true,
+		},
+		{
+			// The hook fallback mint is still hook mode: no parameter exists
+			// for the agent to echo, so no session state is named.
+			name:      "hook-mode mint with agent: agent only",
+			in:        MirrorInput{Resolution: handles.SessionResolution{SessionID: id, Source: handles.SessionSourceMinted, HookMode: true}, AgentID: agent},
+			wantAgent: agent,
 		},
 	} {
 		t.Run(c.name, func(t *testing.T) {
@@ -141,8 +151,17 @@ func TestBuildHandleMirror(t *testing.T) {
 			} else if got != c.wantAgent {
 				t.Errorf("agent_id = %v, want %q", got, c.wantAgent)
 			}
-			if got := m["instructions"]; got != c.wantInstr {
-				t.Errorf("instructions =\n %q\nwant\n %q", got, c.wantInstr)
+			if got, ok := m["status"]; c.wantStatus == "" {
+				if ok {
+					t.Errorf("status must be absent, got %v", got)
+				}
+			} else if got != c.wantStatus {
+				t.Errorf("status = %v, want %q", got, c.wantStatus)
+			}
+			for k := range m {
+				if k != "session_id" && k != "agent_id" && k != "status" {
+					t.Errorf("unexpected mirror member %q", k)
+				}
 			}
 		})
 	}
