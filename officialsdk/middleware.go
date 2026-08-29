@@ -259,28 +259,30 @@ func decorateResult(
 	cp := *res
 	cp.Content = append([]mcp.Content(nil), res.Content...)
 
-	// (a) Trailing text block: on the call that minted a new session, and on
+	// (a) Leading text block: on the call that minted a new session, and on
 	// one that sent a session_id this server never issued. BuildMintBackText
 	// owns that decision — hook mode, foreign and supplied all return "".
-	// Applied unconditionally otherwise: to error results (the retry after an
-	// error must carry the same session) and to tools that return no content
-	// at all (structured-only tools would otherwise never learn their session,
-	// and every call would mint a fresh one).
+	// Prepended as the FIRST content element: IDs at the end of long responses
+	// can be truncated away by clients. Applied unconditionally otherwise: to
+	// error results (the retry after an error must carry the same session) and
+	// to tools that return no content at all (structured-only tools would
+	// otherwise never learn their session, and every call would mint a fresh
+	// one).
 	if text := agentcat.BuildMintBackText(resolution); text != "" {
-		cp.Content = append(cp.Content, &mcp.TextContent{Text: text})
+		cp.Content = append([]mcp.Content{&mcp.TextContent{Text: text}}, cp.Content...)
 	}
 
 	// (b) Structured mirror: persistent handle state on every response,
 	// gated on the output-injection registry, plain-object structuredContent
-	// only, customer's own _mcp_instructions key wins.
+	// only, customer's own mcp_session key wins.
 	mirror := agentcat.BuildHandleMirror(agentcat.MirrorInput{
 		Resolution: resolution,
 		AgentID:    agentID,
 	})
 	if mirror != nil && agentcat.ShouldMirror(toolName, reg) {
 		if sc, ok := structuredContentAsMap(res.StructuredContent); ok {
-			if _, customerOwns := sc[agentcat.MCPInstructionsKey]; !customerOwns {
-				sc[agentcat.MCPInstructionsKey] = mirror
+			if _, customerOwns := sc[agentcat.MCPSessionKey]; !customerOwns {
+				sc[agentcat.MCPSessionKey] = mirror
 				cp.StructuredContent = sc
 			}
 		}

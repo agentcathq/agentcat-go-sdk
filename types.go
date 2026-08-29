@@ -78,9 +78,9 @@ const (
 	ParamAgentID   = constants.ParamAgentID
 	ParamContext   = constants.ParamContext
 
-	// MCPInstructionsKey is the structuredContent member carrying the handle
+	// MCPSessionKey is the structuredContent member carrying the handle
 	// mirror, and the property declared on extended output schemas.
-	MCPInstructionsKey = constants.MCPInstructionsKey
+	MCPSessionKey = constants.MCPSessionKey
 
 	// MetaClientInfoKey and MetaProtocolVersionKey are the reserved _meta keys
 	// a 2026-07-28 client stamps on every request.
@@ -209,7 +209,7 @@ func StripToolArguments(toolName string, args map[string]any, reg *Registries) m
 	return inject.Strip(toolName, args, reg)
 }
 
-// BuildHandleMirror assembles the _mcp_instructions value mirrored into a
+// BuildHandleMirror assembles the mcp_session value mirrored into a
 // response's structuredContent. Returns nil when there is nothing the agent
 // could echo back.
 func BuildHandleMirror(in MirrorInput) map[string]any { return inject.BuildMirror(in) }

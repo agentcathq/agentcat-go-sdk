@@ -60,7 +60,7 @@ func TestMRTRInputRequiredTagsAndSkipsDecoration(t *testing.T) {
 		t.Error("input-required results must pass through undecorated (same object)")
 	}
 	for _, c := range got.Content {
-		if tc, ok := c.(*mcp.TextContent); ok && strings.Contains(tc.Text, "MCP INSTRUCTIONS") {
+		if tc, ok := c.(*mcp.TextContent); ok && strings.Contains(tc.Text, "[session_id") {
 			t.Error("no mint-back on MRTR intermediate results")
 		}
 	}

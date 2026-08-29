@@ -54,8 +54,12 @@ func TestListInjectionAddsHandlesAndRegistries(t *testing.T) {
 			t.Errorf("missing injected param %s", p)
 		}
 	}
-	if containsStr(tool.InputSchema.Required, "session_id") {
-		t.Error("session_id must never be required")
+	if !containsStr(tool.InputSchema.Required, "session_id") {
+		t.Error("session_id must be required")
+	}
+	if sidProp, _ := tool.InputSchema.Properties["session_id"].(map[string]any); sidProp == nil ||
+		sidProp["pattern"] != "^(start|ses_[0-9A-Za-z]{27})$" {
+		t.Errorf("session_id must declare its value pattern, got %v", tool.InputSchema.Properties["session_id"])
 	}
 	if !containsStr(tool.InputSchema.Required, "agent_id") {
 		t.Error("agent_id must be required when agent tracking is on")

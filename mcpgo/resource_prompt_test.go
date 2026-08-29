@@ -335,10 +335,8 @@ func TestResourceAndPromptTracking_WithToolCalls(t *testing.T) {
 	if len(addResult.Content) == 0 {
 		t.Fatal("Expected add_todo to return content")
 	}
-	if tc, ok := addResult.Content[0].(mcp.TextContent); ok {
-		if !strings.Contains(tc.Text, "Added todo") {
-			t.Errorf("Expected add_todo result to contain 'Added todo', got: %s", tc.Text)
-		}
+	if text := resultText(addResult); !strings.Contains(text, "Added todo") {
+		t.Errorf("Expected add_todo result to contain 'Added todo', got: %s", text)
 	}
 
 	// 3. List resources

@@ -238,8 +238,8 @@ func ResolveSessionHandle(args map[string]any, hook func() (string, error), proj
 // truncated to 200 bytes on a rune boundary.
 func ClampAgentID(v string) string { return handles.ClampAgentID(v) }
 
-// BuildMintBackText renders the trailing [MCP INSTRUCTIONS] content block for
-// one call, or "" when there is nothing to say. It is the single decision
+// BuildMintBackText renders the leading text content block for one call, or
+// "" when there is nothing to say. It is the single decision
 // point for whether a call announces anything: minted announces the new
 // handle, invalid corrects the agent without issuing a replacement, and hook,
 // foreign and supplied say nothing. Adapters must not re-derive it.

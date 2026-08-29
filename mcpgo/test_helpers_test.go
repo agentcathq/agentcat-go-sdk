@@ -436,16 +436,17 @@ func (h *spyHarness) listTools() *mcp.ListToolsResult {
 	return result
 }
 
-// lastText returns the text of the final content block of a result.
-func lastText(t *testing.T, result *mcp.CallToolResult) string {
+// firstText returns the text of the FIRST content block of a result — the
+// position where this SDK prepends its mint-back block.
+func firstText(t *testing.T, result *mcp.CallToolResult) string {
 	t.Helper()
 	if result == nil || len(result.Content) == 0 {
 		t.Fatal("result has no content")
 	}
-	last := result.Content[len(result.Content)-1]
-	tc, ok := last.(mcp.TextContent)
+	first := result.Content[0]
+	tc, ok := first.(mcp.TextContent)
 	if !ok {
-		t.Fatalf("last content block is %T, want mcp.TextContent", last)
+		t.Fatalf("first content block is %T, want mcp.TextContent", first)
 	}
 	return tc.Text
 }
@@ -488,14 +489,21 @@ func listToolRawJSON(t *testing.T, mcpServer *server.MCPServer, toolName string)
 	return ""
 }
 
-// resultText extracts the text from the first TextContent entry in a
-// CallToolResult. It returns an empty string when no text content is found.
+// resultText extracts the text of the first TextContent entry in a
+// CallToolResult that is not this SDK's own leading mint-back block, so
+// assertions about the CUSTOMER's text hold whether or not the call was
+// decorated. It returns an empty string when no such content is found.
 func resultText(result *mcp.CallToolResult) string {
-	if result == nil || len(result.Content) == 0 {
+	if result == nil {
 		return ""
 	}
-	if tc, ok := result.Content[0].(mcp.TextContent); ok {
-		return tc.Text
+	for _, c := range result.Content {
+		if tc, ok := c.(mcp.TextContent); ok {
+			if isMintBackText(tc.Text) {
+				continue
+			}
+			return tc.Text
+		}
 	}
 	return ""
 }
@@ -559,10 +567,9 @@ func sid(label string) string {
 	return "ses_" + (b.String() + strings.Repeat("0", 27))[:27]
 }
 
-// mintBackFor renders the [MCP INSTRUCTIONS] block this SDK appends on the
-// call that minted sessionID. Tests assert against the real generator rather
-// than a copied literal, so a copy change cannot pass here and fail on the
-// wire.
+// mintBackFor renders the text block this SDK prepends on the call that
+// minted sessionID. Tests assert against the real generator rather than a
+// copied literal, so a copy change cannot pass here and fail on the wire.
 func mintBackFor(sessionID string) string {
 	return agentcat.BuildMintBackText(agentcat.SessionResolution{
 		SessionID: sessionID,

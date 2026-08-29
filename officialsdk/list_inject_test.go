@@ -119,8 +119,12 @@ func TestListInjectionAddsHandlesAndRegistries(t *testing.T) {
 		}
 	}
 	required := stringSlice(schema["required"])
-	if containsStr(required, "session_id") {
-		t.Error("session_id must never be required")
+	if !containsStr(required, "session_id") {
+		t.Error("session_id must be required")
+	}
+	if sidProp, _ := props["session_id"].(map[string]any); sidProp == nil ||
+		sidProp["pattern"] != "^(start|ses_[0-9A-Za-z]{27})$" {
+		t.Errorf("session_id must declare its value pattern, got %v", props["session_id"])
 	}
 	if !containsStr(required, "agent_id") {
 		t.Error("agent_id must be required when agent tracking is on")

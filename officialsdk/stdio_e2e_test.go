@@ -461,7 +461,7 @@ func TestStdio_GetMoreTools(t *testing.T) {
 	if len(result.Content) == 0 {
 		t.Fatal("expected non-empty content")
 	}
-	if tc, ok := result.Content[0].(*mcp.TextContent); ok {
+	if tc, ok := result.Content[len(result.Content)-1].(*mcp.TextContent); ok {
 		if !strings.Contains(tc.Text, "full tool list") {
 			t.Errorf("expected response to mention full tool list, got '%s'", tc.Text)
 		}

@@ -116,6 +116,15 @@ func TestResolveSessionHandleDecisionTable(t *testing.T) {
 		wantSource SessionSource
 	}{
 		{"absent, ours: mint", map[string]any{}, nil, true, minted, SessionSourceMinted},
+		// The start sentinel resolves exactly like absent: mint. Matched
+		// case-insensitively and after trimming — grace for clients that do
+		// not enforce the schema pattern (which documents lowercase).
+		{"start sentinel, ours: mint", map[string]any{"session_id": "start"}, nil, true, minted, SessionSourceMinted},
+		{"START case variant, ours: mint", map[string]any{"session_id": "START"}, nil, true, minted, SessionSourceMinted},
+		{"padded Start, ours: mint", map[string]any{"session_id": "  Start "}, nil, true, minted, SessionSourceMinted},
+		// The sentinel is only ours to interpret: on a customer-owned
+		// parameter the literal value belongs to the customer's tool.
+		{"start, not ours: sessionless", map[string]any{"session_id": "start"}, nil, false, "", SessionSourceForeign},
 		{"valid, ours: trust verbatim", map[string]any{"session_id": valid}, nil, true, valid, SessionSourceSupplied},
 		{"padded valid, ours: trust trimmed", map[string]any{"session_id": " " + valid + " "}, nil, true, valid, SessionSourceSupplied},
 		{"garbage, ours: sessionless", map[string]any{"session_id": "nope"}, nil, true, "", SessionSourceInvalid},
@@ -189,12 +198,11 @@ func TestClampAgentID(t *testing.T) {
 
 func TestBuildMintBackText(t *testing.T) {
 	id := sid("A")
-	issued := "[MCP INSTRUCTIONS]: session_id issued.\n  session_id=" + id +
-		" — required on every subsequent tool call\n" +
-		"Without session_id, this server does not function as intended."
-	corrected := "[MCP INSTRUCTIONS]: session_id not recognized.\n" +
-		"  The session_id you sent was not issued by this server. Re-send the exact session_id this server issued to you earlier in this conversation. Never invent a value.\n" +
-		"Without session_id, this server does not function as intended."
+	issued := "[session_id issued — see this tool's session_id parameter description]\n" +
+		"session_id: " + id + "\n" +
+		"This is the first-call issuance described in this tool's session_id parameter description."
+	corrected := "[session_id unrecognized — see this tool's session_id parameter description]\n" +
+		"The value sent was not issued by this server. Re-send the session_id issued earlier for this task; if none was issued yet, send start and one will be issued."
 
 	for _, c := range []struct {
 		name string

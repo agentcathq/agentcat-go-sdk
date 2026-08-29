@@ -144,7 +144,7 @@ func TestParallelCallsDoNotCrossAttribute(t *testing.T) {
 func TestParallelCallsMintDistinctSessions(t *testing.T) {
 	call, mock := newConcurrencyClient(t, nil)
 
-	lastTexts := make([]string, parallelCalls)
+	firstTexts := make([]string, parallelCalls)
 
 	var wg sync.WaitGroup
 	for i := range parallelCalls {
@@ -162,12 +162,12 @@ func TestParallelCallsMintDistinctSessions(t *testing.T) {
 				t.Errorf("call %d returned no content", i)
 				return
 			}
-			tc, ok := res.Content[len(res.Content)-1].(mcp.TextContent)
+			tc, ok := res.Content[0].(mcp.TextContent)
 			if !ok {
-				t.Errorf("call %d: last content block is %T", i, res.Content[len(res.Content)-1])
+				t.Errorf("call %d: first content block is %T", i, res.Content[0])
 				return
 			}
-			lastTexts[i] = tc.Text
+			firstTexts[i] = tc.Text
 		}()
 	}
 	wg.Wait()
@@ -197,7 +197,7 @@ func TestParallelCallsMintDistinctSessions(t *testing.T) {
 		t.Errorf("expected %d distinct minted sessions, got %d", parallelCalls, len(minted))
 	}
 
-	for i, got := range lastTexts {
+	for i, got := range firstTexts {
 		session, ok := sessionByPayload[strconv.Itoa(i)]
 		if !ok {
 			t.Errorf("no event for call %d", i)

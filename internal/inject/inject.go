@@ -159,18 +159,65 @@ func stringParamSchema(description string) json.RawMessage {
 	return b
 }
 
-// instructionsPropertySchema is the optional _mcp_instructions property
-// declared on plain-object output schemas.
-func instructionsPropertySchema() json.RawMessage {
-	b, _ := json.Marshal(map[string]any{
-		"type":        "object",
-		"description": constants.MCPInstructionsFieldDescription,
-		"properties": map[string]any{
-			constants.ParamSessionID:        map[string]string{"type": "string", "description": constants.MCPInstructionsSessionIDDescription},
-			constants.ParamAgentID:          map[string]string{"type": "string", "description": constants.MCPInstructionsAgentIDDescription},
-			constants.MirrorInstructionsKey: map[string]string{"type": "string"},
-		},
+// sessionIDParamSchema is stringParamSchema plus the value pattern: the two
+// values the parameter accepts (start, or an issued ses_ ID) are
+// machine-checkable, so schema-enforcing clients reject invented or mangled
+// IDs before the call is ever sent.
+func sessionIDParamSchema() json.RawMessage {
+	b, _ := json.Marshal(map[string]string{
+		"type":        "string",
+		"description": constants.SessionIDParamDescription,
+		"pattern":     constants.SessionIDParamPattern,
 	})
+	return b
+}
+
+// Wire members and status enum values of the mcp_session mirror. The enum is
+// declared on the outputSchema fragment alongside MCPSessionStatusDescription.
+const (
+	mirrorStatusKey    = "status"
+	statusIssued       = "issued"
+	statusActive       = "active"
+	statusUnrecognized = "unrecognized"
+)
+
+// mcpSessionPropertySchema is the optional mcp_session property declared on
+// plain-object output schemas. Its description and its sub-properties are
+// mode-conditional, exactly mirroring what BuildMirror can put on the wire:
+// session_id and status exist only in prompted mode, agent_id only when agent
+// tracking is on. Property order: session_id, agent_id, status.
+func mcpSessionPropertySchema(cfg Config) json.RawMessage {
+	props := NewSchemaObject()
+	if !cfg.HookMode {
+		b, _ := json.Marshal(map[string]string{"type": "string", "description": constants.MCPSessionSessionIDDescription})
+		props.Set(constants.ParamSessionID, b)
+	}
+	if cfg.AgentTracking {
+		b, _ := json.Marshal(map[string]string{"type": "string", "description": constants.MCPSessionAgentIDDescription})
+		props.Set(constants.ParamAgentID, b)
+	}
+	if !cfg.HookMode {
+		b, _ := json.Marshal(map[string]any{
+			"type":        "string",
+			"enum":        []any{statusIssued, statusActive, statusUnrecognized},
+			"description": constants.MCPSessionStatusDescription,
+		})
+		props.Set(mirrorStatusKey, b)
+	}
+
+	description := constants.MCPSessionFieldDescription
+	if cfg.HookMode {
+		description = constants.MCPSessionFieldDescriptionHookMode
+	}
+
+	field := NewSchemaObject()
+	typeRaw, _ := json.Marshal("object")
+	field.Set("type", typeRaw)
+	descRaw, _ := json.Marshal(description)
+	field.Set("description", descRaw)
+	propsRaw, _ := json.Marshal(props)
+	field.Set("properties", propsRaw)
+	b, _ := json.Marshal(field)
 	return b
 }
 
@@ -236,10 +283,11 @@ func Build(cfg Config, tools []NormalizedTool) ([]NormalizedTool, *Registries) {
 				}
 
 				if cfg.InjectHandles && !cfg.HookMode {
-					want := stringParamSchema(constants.SessionIDParamDescription)
+					want := sessionIDParamSchema()
 					if claimProperty(props, constants.ParamSessionID, want) {
 						props.Set(constants.ParamSessionID, want)
 						injected = append(injected, constants.ParamSessionID)
+						required = appendUnique(required, constants.ParamSessionID)
 					} else {
 						// Recorded, not logged: the call path reports this
 						// once per tool with remediation. Escalated above a
@@ -248,11 +296,7 @@ func Build(cfg Config, tools []NormalizedTool) ([]NormalizedTool, *Registries) {
 					}
 				}
 				if cfg.InjectHandles && cfg.AgentTracking {
-					desc := constants.AgentIDParamDescription
-					if cfg.HookMode {
-						desc = constants.AgentIDParamDescriptionHookMode
-					}
-					want := stringParamSchema(desc)
+					want := stringParamSchema(constants.AgentIDParamDescription)
 					if claimProperty(props, constants.ParamAgentID, want) {
 						props.Set(constants.ParamAgentID, want)
 						injected = append(injected, constants.ParamAgentID)
@@ -290,10 +334,15 @@ func Build(cfg Config, tools []NormalizedTool) ([]NormalizedTool, *Registries) {
 			}
 		}
 
-		if cfg.InjectHandles {
+		// Output declaration only when at least one handle is injectable. In
+		// hook mode with agent tracking off the mcp_session fragment would
+		// declare no properties and BuildMirror can never produce a payload,
+		// so the field is not declared at all — matching the TypeScript and
+		// Python SDKs, which skip the handle pass entirely there.
+		if cfg.InjectHandles && (!cfg.HookMode || cfg.AgentTracking) {
 			if t.OutputSchemaOpaque {
 				logger.Warnf("inject: tool %q has an unreadable output schema; advertising it untouched and leaving mint-back content-only", t.Name)
-			} else if outSchema, did := injectOutput(t.Name, t.OutputSchema); did {
+			} else if outSchema, did := injectOutput(cfg, t.Name, t.OutputSchema); did {
 				result.OutputSchema = outSchema
 				reg.OutputInjected[t.Name] = true
 			}
@@ -380,12 +429,11 @@ func parsePropsAndRequired(toolName string, in *SchemaObject) (*SchemaObject, []
 	return props, required, true
 }
 
-// injectOutput declares the optional _mcp_instructions property on a
-// plain-object output schema. Returns (schema, false) untouched for absent,
-// composed, non-object, or customer-owned-key schemas. Output
-// additionalProperties is never modified: the declared property is what keeps
-// validators happy.
-func injectOutput(toolName string, out *SchemaObject) (*SchemaObject, bool) {
+// injectOutput declares the optional mcp_session property on a plain-object
+// output schema. Returns (schema, false) untouched for absent, composed,
+// non-object, or customer-owned-key schemas. Output additionalProperties is
+// never modified: the declared property is what keeps validators happy.
+func injectOutput(cfg Config, toolName string, out *SchemaObject) (*SchemaObject, bool) {
 	if out == nil {
 		return nil, false
 	}
@@ -410,12 +458,12 @@ func injectOutput(toolName string, out *SchemaObject) (*SchemaObject, bool) {
 		}
 		props = parsed
 	}
-	want := instructionsPropertySchema()
-	if !claimProperty(props, constants.MCPInstructionsKey, want) {
+	want := mcpSessionPropertySchema(cfg)
+	if !claimProperty(props, constants.MCPSessionKey, want) {
 		// Customer data — it wins; skip.
 		return out, false
 	}
-	props.Set(constants.MCPInstructionsKey, want)
+	props.Set(constants.MCPSessionKey, want)
 	propsRaw, err := json.Marshal(props)
 	if err != nil {
 		return out, false
@@ -478,47 +526,40 @@ type MirrorInput struct {
 	AgentID    string // supplied agent_id verbatim; "" when absent
 }
 
-// BuildMirror assembles the _mcp_instructions value mirrored into
-// structuredContent on every response. Returns nil when there is nothing
-// the agent could echo.
+// BuildMirror assembles the mcp_session value mirrored into structuredContent
+// on every response: {session_id?, agent_id?, status?}. Returns nil when the
+// payload would be empty.
 //
-// A session is echoable only when it is one this SDK issued and the agent has
-// a parameter to send it back on. That rules out hook mode (no parameter
-// exists) and invalid (the value was rejected, so echoing it would confirm an
-// ID this server never issued — the exact loop validation exists to break).
-// A foreign call mirrors nothing at all: the parameter belongs to the
-// customer's tool, so AgentCat has no standing to speak about it.
+// session_id and status exist only in prompted mode. A session is echoable
+// only when it is one this SDK issued and the agent has a parameter to send it
+// back on; status pre-announces which of the schema's declared states this
+// response is in (issued / active / unrecognized). Hook mode carries agent_id
+// only: no parameter exists for the agent to echo, so there is no session
+// state to name. A foreign call (the session_id parameter belongs to the
+// customer's tool) is the same — the parameter is not ours to speak about, so
+// only agent_id is mirrored.
 func BuildMirror(in MirrorInput) map[string]any {
 	res := in.Resolution
-	if res.Source == handles.SessionSourceForeign {
-		return nil
-	}
-
-	sessionEchoable := !res.HookMode &&
-		res.Source != handles.SessionSourceInvalid &&
-		res.SessionID != ""
-
 	m := map[string]any{}
-	var names []string
-	if sessionEchoable {
-		m[constants.ParamSessionID] = res.SessionID
-		names = append(names, constants.ParamSessionID)
+	if !res.HookMode && res.Source != handles.SessionSourceForeign {
+		switch res.Source {
+		case handles.SessionSourceMinted:
+			m[constants.ParamSessionID] = res.SessionID
+			m[mirrorStatusKey] = statusIssued
+		case handles.SessionSourceSupplied:
+			m[constants.ParamSessionID] = res.SessionID
+			m[mirrorStatusKey] = statusActive
+		case handles.SessionSourceInvalid:
+			// No session_id key: echoing back a value this server rejected
+			// would confirm an ID it never issued.
+			m[mirrorStatusKey] = statusUnrecognized
+		}
 	}
 	if in.AgentID != "" {
 		m[constants.ParamAgentID] = in.AgentID
-		names = append(names, constants.ParamAgentID)
 	}
-
-	text := handles.BuildMintBackText(res)
-	if len(m) == 0 && text == "" {
+	if len(m) == 0 {
 		return nil
-	}
-	if text != "" {
-		// minted (announce) or invalid (correct). The invalid shape carries
-		// instructions and any agent_id, but no session_id key.
-		m[constants.MirrorInstructionsKey] = text
-	} else {
-		m[constants.MirrorInstructionsKey] = constants.MintBackConfirmed(names)
 	}
 	return m
 }

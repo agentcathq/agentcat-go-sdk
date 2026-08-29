@@ -72,9 +72,11 @@ func decodeEchoed(t *testing.T, result *mcp.CallToolResult) map[string]any {
 	if len(result.Content) == 0 {
 		t.Fatal("echo tool returned no content")
 	}
-	tc, ok := result.Content[0].(*mcp.TextContent)
+	// The customer's own text is the LAST block (a mint-back, when present,
+	// is prepended as the first).
+	tc, ok := result.Content[len(result.Content)-1].(*mcp.TextContent)
 	if !ok {
-		t.Fatalf("echo tool content is %T, want *mcp.TextContent", result.Content[0])
+		t.Fatalf("echo tool content is %T, want *mcp.TextContent", result.Content[len(result.Content)-1])
 	}
 	var echoed map[string]any
 	if err := json.Unmarshal([]byte(tc.Text), &echoed); err != nil {
@@ -140,7 +142,7 @@ func TestUnparseableSchemaIsAdvertisedUntouched(t *testing.T) {
 		t.Fatalf("CallTool: %v", err)
 	}
 	if sc, ok := res.StructuredContent.(map[string]any); ok {
-		if _, has := sc["_mcp_instructions"]; has {
+		if _, has := sc["mcp_session"]; has {
 			t.Errorf("a schema the SDK cannot read must not be mirrored into: %v", sc)
 		}
 	}
@@ -265,7 +267,7 @@ func TestTrackIsIdempotentPerServer(t *testing.T) {
 	// Exactly one mint-back block on the wire, not two.
 	mintBacks := 0
 	for _, block := range res.Content {
-		if tc, ok := block.(*mcp.TextContent); ok && strings.Contains(tc.Text, "[MCP INSTRUCTIONS]") {
+		if tc, ok := block.(*mcp.TextContent); ok && strings.Contains(tc.Text, "[session_id") {
 			mintBacks++
 		}
 	}

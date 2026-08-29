@@ -131,8 +131,8 @@ func TestParallelCallsMintDistinctSessions(t *testing.T) {
 	clientSession, _, mock := setupStreamableHTTP(t, nil)
 
 	type outcome struct {
-		payload  string
-		lastText string
+		payload   string
+		firstText string
 	}
 	results := make([]outcome, parallelCalls)
 
@@ -154,12 +154,12 @@ func TestParallelCallsMintDistinctSessions(t *testing.T) {
 				t.Errorf("call %d returned no content", i)
 				return
 			}
-			tc, ok := res.Content[len(res.Content)-1].(*mcp.TextContent)
+			tc, ok := res.Content[0].(*mcp.TextContent)
 			if !ok {
-				t.Errorf("call %d: last content block is %T", i, res.Content[len(res.Content)-1])
+				t.Errorf("call %d: first content block is %T", i, res.Content[0])
 				return
 			}
-			results[i] = outcome{payload: payload, lastText: tc.Text}
+			results[i] = outcome{payload: payload, firstText: tc.Text}
 		}()
 	}
 	wg.Wait()
@@ -195,8 +195,8 @@ func TestParallelCallsMintDistinctSessions(t *testing.T) {
 			t.Errorf("no event for call %d", i)
 			continue
 		}
-		if want := mintBackFor(session); got.lastText != want {
-			t.Errorf("call %d got mint-back %q, want %q", i, got.lastText, want)
+		if want := mintBackFor(session); got.firstText != want {
+			t.Errorf("call %d got mint-back %q, want %q", i, got.firstText, want)
 		}
 	}
 }

@@ -460,7 +460,7 @@ func TestHTTP_StatelessSharedServer(t *testing.T) {
 	if !strings.HasPrefix(minted, "ses_") {
 		t.Errorf("expected a minted ses_ session, got %q", minted)
 	}
-	if got := lastText(t, res); got != mintBackFor(minted) {
+	if got := firstText(t, res); got != mintBackFor(minted) {
 		t.Errorf("stateless mint-back = %q, want %q", got, mintBackFor(minted))
 	}
 	if evt.UserIntent == nil || *evt.UserIntent != "why" {
@@ -606,7 +606,7 @@ func TestHTTP_GetMoreTools(t *testing.T) {
 	if len(result.Content) == 0 {
 		t.Fatal("expected non-empty content")
 	}
-	if tc, ok := result.Content[0].(*mcp.TextContent); ok {
+	if tc, ok := result.Content[len(result.Content)-1].(*mcp.TextContent); ok {
 		if !strings.Contains(tc.Text, "full tool list") {
 			t.Errorf("expected response to mention full tool list, got '%s'", tc.Text)
 		}

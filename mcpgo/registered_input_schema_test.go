@@ -45,8 +45,8 @@ func TestClosedInputSchemaAcceptsInjectedParams(t *testing.T) {
 			t.Fatalf("advertised schema for echo_args is missing %s: %s", want, advertised)
 		}
 	}
-	if !strings.Contains(advertised, `"required":["context"]`) {
-		t.Fatalf("advertised schema must mark context required: %s", advertised)
+	if !strings.Contains(advertised, `"required":["session_id","context"]`) {
+		t.Fatalf("advertised schema must mark session_id and context required: %s", advertised)
 	}
 
 	result, evt := h.call("echo_args", map[string]any{
