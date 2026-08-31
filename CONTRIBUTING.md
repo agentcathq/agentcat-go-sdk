@@ -147,10 +147,10 @@ here and only breaks for someone installing from the proxy.
    the adapters have something to resolve against:
 
    ```bash
-   git tag v2.0.0
-   git tag mcpgo/v2.0.0
-   git tag officialsdk/v2.0.0
-   git push origin v2.0.0 mcpgo/v2.0.0 officialsdk/v2.0.0
+   git tag v2.1.0
+   git tag mcpgo/v2.1.0
+   git tag officialsdk/v2.1.0
+   git push origin v2.1.0 mcpgo/v2.1.0 officialsdk/v2.1.0
    ```
 
 3. Verify from a directory outside this repo, where the `replace` directives do
@@ -158,8 +158,8 @@ here and only breaks for someone installing from the proxy.
 
    ```bash
    cd "$(mktemp -d)" && go mod init check
-   go get go.agentcat.com/sdk/mcpgo/v2@v2.0.0
-   go get go.agentcat.com/sdk/officialsdk/v2@v2.0.0
+   go get go.agentcat.com/sdk/mcpgo/v2@v2.1.0
+   go get go.agentcat.com/sdk/officialsdk/v2@v2.1.0
    ```
 
 Prerelease versions are never selected by `@latest`, so a beta does not become
