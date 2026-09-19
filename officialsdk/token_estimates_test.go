@@ -55,9 +55,10 @@ func TestToolCallEventsCarryTokenEstimates(t *testing.T) {
 }
 
 // F1: a structured-only result (no Content blocks) must still record an
-// empty "content" list on the event, so tokens.OutputTokens sees a list and
-// returns 0 rather than falling back to the whole response — which would
-// count the structuredContent padding.
+// empty "content" list on the event, so tokens.OutputTokens sees a list
+// rather than falling back to the whole response — which would count the
+// envelope keys too — and, seeing the list is empty, counts the compact JSON
+// of StructuredContent instead of 0.
 //
 // A typed mcp.AddTool[In, Out] handler cannot produce this case: when the
 // handler leaves Content nil, go-sdk synthesizes a JSON-text content block
@@ -71,7 +72,7 @@ func TestToolCallEventsCarryTokenEstimates(t *testing.T) {
 // SDK's middleware. So the empty-Content case is real and reachable, just
 // never as a raw `nil` — this test exercises it end-to-end rather than
 // constructing `Content: []mcp.Content{}` by hand.
-func TestTokenEstimatesStructuredOnlyResultCountsZero(t *testing.T) {
+func TestTokenEstimatesStructuredOnlyResultCountsStructuredContent(t *testing.T) {
 	serverImpl := &mcp.Implementation{Name: "tokens-structured", Version: "1.0.0"}
 	server := mcp.NewServer(serverImpl, nil)
 	server.AddTool(
@@ -101,8 +102,9 @@ func TestTokenEstimatesStructuredOnlyResultCountsZero(t *testing.T) {
 	cs := connectClient(t, server)
 	_, evt := callToolOn(t, cs, mock, "structured_probe", map[string]any{})
 
-	if evt.OutputTokens == nil || *evt.OutputTokens != 0 {
-		t.Errorf("OutputTokens = %v, want 0", evt.OutputTokens)
+	// {"big":"` (8 bytes) + 50 y's + `"}` (2 bytes) = 60 bytes -> ceil(60/3.5) = 18.
+	if evt.OutputTokens == nil || *evt.OutputTokens != 18 {
+		t.Errorf("OutputTokens = %v, want 18", evt.OutputTokens)
 	}
 	content, ok := evt.Response["content"].([]any)
 	if !ok || len(content) != 0 {

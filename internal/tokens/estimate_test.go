@@ -114,6 +114,10 @@ func TestOutputTokens(t *testing.T) {
 		{"4k text", map[string]any{"content": []any{text(strings.Repeat("x", 4096))}}, 1171},
 		{"non-string text", map[string]any{"content": []any{map[string]any{"type": "text", "text": 42}, nil, "str"}}, 0},
 		{"no content list falls back", map[string]any{"result": "ok"}, 5},
+		{"empty content, structured-only", map[string]any{"content": []any{}, "structuredContent": map[string]any{"result": "ok"}}, 5},
+		{"empty content, no structuredContent", map[string]any{"content": []any{}}, 0},
+		{"empty content, nil structuredContent", map[string]any{"content": []any{}, "structuredContent": nil}, 0},
+		{"image-only content, structuredContent present", map[string]any{"content": []any{map[string]any{"type": "image", "data": "QUJD", "mimeType": "image/png"}}, "structuredContent": map[string]any{"result": "ok"}}, 0},
 	}
 	for _, c := range cases {
 		got, ok := OutputTokens(c.response)

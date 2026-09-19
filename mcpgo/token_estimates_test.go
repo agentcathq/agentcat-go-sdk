@@ -69,9 +69,10 @@ func TestToolCallEventsCarryTokenEstimates(t *testing.T) {
 
 // F1: a structured-only result (no Content blocks at all) must still record
 // an empty "content" list on the event, so tokens.OutputTokens sees a list
-// and returns 0 rather than falling back to the whole response — which would
-// count the structuredContent padding.
-func TestTokenEstimatesStructuredOnlyResultCountsZero(t *testing.T) {
+// rather than falling back to the whole response — which would count the
+// envelope keys too — and, seeing the list is empty, counts the compact JSON
+// of StructuredContent instead of 0.
+func TestTokenEstimatesStructuredOnlyResultCountsStructuredContent(t *testing.T) {
 	mcpServer := server.NewMCPServer("tokens-structured", "1.0.0", server.WithToolCapabilities(true))
 	mcpServer.AddTool(
 		mcp.NewToolWithRawSchema("structured_probe", "structured-only reply", json.RawMessage(`{"type":"object"}`)),
@@ -99,8 +100,9 @@ func TestTokenEstimatesStructuredOnlyResultCountsZero(t *testing.T) {
 	}
 
 	evt := events[0]
-	if evt.OutputTokens == nil || *evt.OutputTokens != 0 {
-		t.Errorf("OutputTokens = %v, want 0", evt.OutputTokens)
+	// {"big":"` (8 bytes) + 50 y's + `"}` (2 bytes) = 60 bytes -> ceil(60/3.5) = 18.
+	if evt.OutputTokens == nil || *evt.OutputTokens != 18 {
+		t.Errorf("OutputTokens = %v, want 18", evt.OutputTokens)
 	}
 	content, ok := evt.Response["content"].([]any)
 	if !ok || len(content) != 0 {

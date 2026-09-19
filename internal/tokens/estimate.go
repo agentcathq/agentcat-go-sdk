@@ -87,6 +87,16 @@ func OutputTokens(response map[string]any) (int32, bool) {
 		}
 		return Estimate(n), true
 	}
+	if len(content) == 0 {
+		if structured, present := response["structuredContent"]; present && structured != nil {
+			n, ok := compactJSONBytes(structured)
+			if !ok {
+				return 0, false
+			}
+			return Estimate(n), true
+		}
+		return 0, true
+	}
 	total := 0
 	for _, block := range content {
 		total += contentBlockBytes(block)
