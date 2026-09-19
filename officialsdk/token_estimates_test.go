@@ -2,6 +2,7 @@ package officialsdk
 
 import (
 	"context"
+	"strings"
 	"testing"
 
 	"github.com/modelcontextprotocol/go-sdk/mcp"
@@ -50,5 +51,61 @@ func TestToolCallEventsCarryTokenEstimates(t *testing.T) {
 	}
 	if evt.OutputTokens == nil || *evt.OutputTokens != 4 {
 		t.Errorf("OutputTokens = %v, want 4", evt.OutputTokens)
+	}
+}
+
+// F1: a structured-only result (no Content blocks) must still record an
+// empty "content" list on the event, so tokens.OutputTokens sees a list and
+// returns 0 rather than falling back to the whole response — which would
+// count the structuredContent padding.
+//
+// A typed mcp.AddTool[In, Out] handler cannot produce this case: when the
+// handler leaves Content nil, go-sdk synthesizes a JSON-text content block
+// from the structured output before this SDK ever sees the result (go-sdk
+// mcp/server.go v1.7.0 around line 935, "If the Content field isn't being
+// used, return the serialized JSON in a TextContent block"). The low-level,
+// non-generic (*mcp.Server).AddTool handler below skips that synthesis —
+// but go-sdk still refuses to hand back a nil Content: (*Server).callTool
+// normalizes it to a non-nil, EMPTY []mcp.Content{} (go-sdk mcp/server.go
+// v1.7.0 around line 968, "avoid \"null\"") before the result reaches this
+// SDK's middleware. So the empty-Content case is real and reachable, just
+// never as a raw `nil` — this test exercises it end-to-end rather than
+// constructing `Content: []mcp.Content{}` by hand.
+func TestTokenEstimatesStructuredOnlyResultCountsZero(t *testing.T) {
+	serverImpl := &mcp.Implementation{Name: "tokens-structured", Version: "1.0.0"}
+	server := mcp.NewServer(serverImpl, nil)
+	server.AddTool(
+		&mcp.Tool{Name: "structured_probe", Description: "structured-only reply", InputSchema: map[string]any{"type": "object"}},
+		func(ctx context.Context, req *mcp.CallToolRequest) (*mcp.CallToolResult, error) {
+			return &mcp.CallToolResult{
+				StructuredContent: map[string]any{"big": strings.Repeat("y", 50)},
+			}, nil
+		},
+	)
+
+	opts := DefaultOptions()
+	opts.DisableToolCallContext = true
+	opts.DisableReportMissing = true
+	mock := &mockPublisher{}
+	instance := &agentcat.AgentCatInstance{
+		ProjectID: "proj_test",
+		Options: &agentcat.Options{
+			DisableReportMissing:   opts.DisableReportMissing,
+			DisableToolCallContext: opts.DisableToolCallContext,
+		},
+	}
+	agentcat.RegisterServer(server, instance)
+	server.AddReceivingMiddleware(newTrackingMiddleware(server, "proj_test", opts, mock.publish, serverImpl))
+	t.Cleanup(func() { agentcat.UnregisterServer(server) })
+
+	cs := connectClient(t, server)
+	_, evt := callToolOn(t, cs, mock, "structured_probe", map[string]any{})
+
+	if evt.OutputTokens == nil || *evt.OutputTokens != 0 {
+		t.Errorf("OutputTokens = %v, want 0", evt.OutputTokens)
+	}
+	content, ok := evt.Response["content"].([]any)
+	if !ok || len(content) != 0 {
+		t.Errorf("Response[\"content\"] = %#v, want []any{}", evt.Response["content"])
 	}
 }

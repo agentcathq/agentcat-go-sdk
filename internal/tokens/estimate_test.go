@@ -1,6 +1,7 @@
 package tokens
 
 import (
+	"strconv"
 	"strings"
 	"testing"
 )
@@ -18,14 +19,26 @@ func TestBytesPerTokenIsPinned(t *testing.T) {
 }
 
 func TestEstimate(t *testing.T) {
+	// bytes is int64, not int: the clamp row's byte count (7516192765)
+	// overflows a 32-bit int, and Estimate takes an int, so that row is
+	// appended only where int is 64 bits wide (strconv.IntSize). int64
+	// holds the literal on every platform; only the eventual int(...)
+	// conversion below would overflow on 32-bit, so that row is skipped
+	// there instead of attempting it.
 	cases := []struct {
-		bytes int
+		bytes int64
 		want  int32
 	}{
-		{0, 0}, {1, 1}, {7, 2}, {13, 4}, {4096, 1171}, {7516192765, 2147483647},
+		{0, 0}, {1, 1}, {7, 2}, {13, 4}, {4096, 1171}, {-1, 0},
+	}
+	if strconv.IntSize == 64 {
+		cases = append(cases, struct {
+			bytes int64
+			want  int32
+		}{7516192765, 2147483647})
 	}
 	for _, c := range cases {
-		if got := Estimate(c.bytes); got != c.want {
+		if got := Estimate(int(c.bytes)); got != c.want {
 			t.Errorf("Estimate(%d) = %d, want %d", c.bytes, got, c.want)
 		}
 	}
