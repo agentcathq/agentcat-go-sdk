@@ -597,6 +597,9 @@ func (c *capturer) captureToolCallEvent(
 	if result != nil && !isError {
 		evt.Response = extractResponse(result)
 	}
+	// Estimated on the raw payloads here, before the publisher's redaction
+	// hooks run; nothing downstream recomputes them.
+	agentcat.ApplyTokenEstimates(evt)
 
 	// Customer tags/properties first, then SDK tags (SDK wins, cap-exempt).
 	attachEventMetadata(ctx, opts, &request, evt)

@@ -130,3 +130,21 @@ func TestExtractResponse_NilResponse(t *testing.T) {
 		t.Errorf("expected nil response for nil input, got %v", resp)
 	}
 }
+
+func TestExtractResponse_EmptyContent(t *testing.T) {
+	// A structured-only result (no Content blocks) must still record an
+	// empty "content" list: a missing key would make tokens.OutputTokens
+	// fall back to counting the whole response, structuredContent included.
+	result := &mcp.CallToolResult{
+		StructuredContent: map[string]any{"text": "structured"},
+	}
+
+	resp := extractResponse(result)
+	if resp == nil {
+		t.Fatal("expected non-nil response")
+	}
+	content, ok := resp["content"].([]any)
+	if !ok || len(content) != 0 {
+		t.Errorf("expected resp[\"content\"] = []any{}, got %#v", resp["content"])
+	}
+}
