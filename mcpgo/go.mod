@@ -14,7 +14,7 @@ require (
 	github.com/segmentio/ksuid v1.0.4 // indirect
 	github.com/spf13/cast v1.7.1 // indirect
 	github.com/yosida95/uritemplate/v3 v3.0.2 // indirect
-	go.agentcat.com/api v1.0.0 // indirect
+	go.agentcat.com/api v1.0.4 // indirect
 	golang.org/x/text v0.14.0 // indirect
 	gopkg.in/validator.v2 v2.0.1 // indirect
 )
