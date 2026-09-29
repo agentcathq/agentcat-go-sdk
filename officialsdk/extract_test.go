@@ -58,6 +58,13 @@ func TestExtractResponse_ToolsCall_StructuredContent(t *testing.T) {
 	if !ok || sc["text"] != "hi" {
 		t.Errorf("structuredContent not converted: %v", resp["structuredContent"])
 	}
+	// The content list is always recorded, even when the result carries none:
+	// a missing key would make tokens.OutputTokens fall back to counting the
+	// whole response, structuredContent included.
+	content, ok := resp["content"].([]any)
+	if !ok || len(content) != 0 {
+		t.Errorf("expected resp[\"content\"] = []any{}, got %#v", resp["content"])
+	}
 }
 
 func TestExtractResponse_NilResult(t *testing.T) {

@@ -23,8 +23,15 @@ func extractResponse(method string, result mcp.Result) map[string]any {
 			if r.StructuredContent != nil {
 				resp["structuredContent"] = agentcat.ConvertToMap(r.StructuredContent)
 			}
+			// The content list is always recorded, even empty: tokens.OutputTokens
+			// treats a missing "content" key as "no content list" and falls back to
+			// counting the whole response (structuredContent included). The wire
+			// carries `[]` for an empty Content slice too, so this matches what the
+			// customer's own client sees.
 			if len(r.Content) > 0 {
 				resp["content"] = agentcat.ConvertToMap(r.Content)
+			} else {
+				resp["content"] = []any{}
 			}
 			resp["isError"] = r.IsError
 		}
