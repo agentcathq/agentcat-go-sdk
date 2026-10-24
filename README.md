@@ -12,7 +12,7 @@
     <span> · </span>
     <a href="#free-for-open-source">Open Source</a>
     <span> · </span>
-    <a href="https://meet.agentcat.com/meet">Schedule a Demo</a>
+    <a href="https://book.agentcat.com/meet">Schedule a Demo</a>
 </h3>
 <p align="center">
   <a href="https://pkg.go.dev/go.agentcat.com/sdk/v2"><img src="https://pkg.go.dev/badge/go.agentcat.com/sdk/v2.svg" alt="Go Reference"></a>
