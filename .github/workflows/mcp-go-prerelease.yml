@@ -1,8 +1,19 @@
 name: mcp-go Prerelease Testing
 
 on:
+  # Runs on PRs that change SDK code so a break against an upcoming
+  # mcpgo prerelease shows up before merge, not the next morning.
+  pull_request:
+    paths:
+      - '*.go'
+      - 'go.mod'
+      - 'go.sum'
+      - 'internal/**'
+      - 'mcpgo/**'
+      - '.github/workflows/mcp-go-prerelease.yml'
+      - '!**/*.md'
   schedule:
-    - cron: '0 3 * * *'
+    - cron: '0 2 * * *'
   workflow_dispatch:
 
 jobs:

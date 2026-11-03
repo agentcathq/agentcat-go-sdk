@@ -1,8 +1,19 @@
 name: go-sdk Prerelease Testing
 
 on:
+  # Runs on PRs that change SDK code so a break against an upcoming
+  # officialsdk prerelease shows up before merge, not the next morning.
+  pull_request:
+    paths:
+      - '*.go'
+      - 'go.mod'
+      - 'go.sum'
+      - 'internal/**'
+      - 'officialsdk/**'
+      - '.github/workflows/go-sdk-prerelease.yml'
+      - '!**/*.md'
   schedule:
-    - cron: '0 3 * * *'
+    - cron: '0 2 * * *'
   workflow_dispatch:
 
 jobs:
