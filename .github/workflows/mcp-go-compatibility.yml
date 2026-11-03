@@ -10,8 +10,53 @@ on:
   workflow_dispatch:
 
 jobs:
+  # Decides whether this PR touches SDK code. The compat jobs below hold
+  # required status checks, so they are skipped (which satisfies the check)
+  # instead of filtering the whole workflow with on.pull_request.paths.
+  changes:
+    name: Detect SDK code changes
+    runs-on: ubuntu-latest
+    outputs:
+      sdk: ${{ steps.filter.outputs.sdk }}
+    steps:
+      - name: Check out code
+        if: github.event_name == 'pull_request'
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Check changed files
+        id: filter
+        env:
+          EVENT_NAME: ${{ github.event_name }}
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+        run: |
+          if [ "$EVENT_NAME" != "pull_request" ]; then
+            echo "Not a pull request: running compat tests"
+            echo "sdk=true" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+
+          CHANGED=$(git diff --name-only "$BASE_SHA...$HEAD_SHA")
+          echo "Changed files:"
+          echo "$CHANGED"
+
+          # SDK code: root package, shared internals, the mcpgo adapter
+          # module, the Go manifests, and this workflow. Markdown is never SDK code.
+          SDK_RE='^([^/]+\.go|go\.mod|go\.sum|internal/.+|mcpgo/.+|\.github/workflows/mcp-go-compatibility\.yml)$'
+          if echo "$CHANGED" | grep -v '\.md$' | grep -qE "$SDK_RE"; then
+            echo "SDK code changed: running compat tests"
+            echo "sdk=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "No SDK code changed: skipping compat tests"
+            echo "sdk=false" >> "$GITHUB_OUTPUT"
+          fi
+
   discover-versions:
     name: Discover mcp-go versions
+    needs: changes
+    if: github.event_name != 'pull_request' || needs.changes.outputs.sdk == 'true'
     runs-on: ubuntu-latest
     outputs:
       versions: ${{ steps.get-versions.outputs.versions }}
@@ -115,9 +160,15 @@ jobs:
 
   summary:
     name: Compatibility Test Summary
-    needs: [discover-versions, test]
+    needs: [changes, discover-versions, test]
     runs-on: ubuntu-latest
-    if: always()
+    # Skipped on PRs without SDK code (a skipped required check passes). It
+    # still runs, and fails, if the changes job itself failed.
+    if: >-
+      always() &&
+      (github.event_name != 'pull_request' ||
+       needs.changes.outputs.sdk == 'true' ||
+       needs.changes.result != 'success')
     steps:
       - name: Check test results
         run: |
