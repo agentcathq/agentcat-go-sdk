@@ -54,6 +54,12 @@ func (r *heartbeatRecorder) answerWith(t *testing.T, answer func(ctx context.Con
 	})
 }
 
+func (r *heartbeatRecorder) clear() {
+	r.mu.Lock()
+	r.bodies = nil
+	r.mu.Unlock()
+}
+
 func (r *heartbeatRecorder) bodiesFor(projectID string) []*agentcat.ServerInfoRequest {
 	r.mu.Lock()
 	defer r.mu.Unlock()
@@ -90,6 +96,7 @@ func (c *fakeClock) advance(d time.Duration) {
 func newHeartbeatMemory(t *testing.T) *fakeClock {
 	t.Helper()
 	agentcat.WaitServerInfoForTest(10 * time.Second)
+	heartbeats.clear()
 	t.Cleanup(agentcat.SetServerInfoEnabledForTest(true))
 	clock := &fakeClock{t: time.Date(2026, 11, 16, 12, 0, 0, 0, time.UTC)}
 	t.Cleanup(agentcat.SetServerInfoClockForTest(clock.now))
