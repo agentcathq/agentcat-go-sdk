@@ -134,7 +134,7 @@ func messageList(s *server.MCPServer, method mcp.MCPMethod, key string) agentcat
 			return agentcat.ServerInfoPage{}, err
 		}
 		if reply.Error != nil {
-			return agentcat.ServerInfoPage{}, fmt.Errorf("%s: %s (code %d)", method, reply.Error.Message, reply.Error.Code)
+			return agentcat.ServerInfoPage{}, fmt.Errorf("%s: JSON-RPC error (code %d)", method, reply.Error.Code)
 		}
 		if reply.Result == nil {
 			return agentcat.ServerInfoPage{}, fmt.Errorf("%s: no result", method)

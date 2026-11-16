@@ -74,7 +74,7 @@ func buildWithin(ctx context.Context, target Target, load func() (*Source, error
 	}
 	done := make(chan outcome, 1)
 	goGuarded(func(recovered any) {
-		done <- outcome{err: fmt.Errorf("build panicked: %v", recovered)}
+		done <- outcome{err: fmt.Errorf("build panicked (%T)", recovered)}
 	}, func() {
 		src, err := load()
 		if err == nil && src == nil {
@@ -103,7 +103,7 @@ func goGuarded(onPanic func(recovered any), fn func()) {
 	go func() {
 		defer func() {
 			if r := recover(); r != nil {
-				logDebug("server info: recovered panic: %v", r)
+				logDebug("server info: recovered panic (%T)", r)
 				if onPanic != nil {
 					onPanic(r)
 				}

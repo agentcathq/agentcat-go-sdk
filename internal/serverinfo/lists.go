@@ -36,6 +36,8 @@ var (
 // list fails when a cursor repeats, when it has more than maxPages pages, when
 // it takes longer than listTimeout, or when the handler fails or panics. A
 // handler that ignores its context is left running; its result is discarded.
+// A handler's error or panic is reported by its type only, since its text
+// can quote the customer's data.
 func collectList(ctx context.Context, list ListFunc) ([]any, error) {
 	ctx, cancel := context.WithTimeout(ctx, listTimeout)
 	defer cancel()
@@ -46,7 +48,7 @@ func collectList(ctx context.Context, list ListFunc) ([]any, error) {
 	}
 	done := make(chan outcome, 1)
 	goGuarded(func(recovered any) {
-		done <- outcome{err: fmt.Errorf("list handler panicked: %v", recovered)}
+		done <- outcome{err: fmt.Errorf("list handler panicked (%T)", recovered)}
 	}, func() {
 		items, err := pageThrough(ctx, list)
 		done <- outcome{items: items, err: err}
@@ -70,7 +72,7 @@ func pageThrough(ctx context.Context, list ListFunc) ([]any, error) {
 		}
 		p, err := list(ctx, cursor)
 		if err != nil {
-			return nil, err
+			return nil, fmt.Errorf("list handler failed (%T)", err)
 		}
 		if err := ctx.Err(); err != nil {
 			return nil, err

@@ -16,7 +16,7 @@ var identityKeys = map[string]struct{}{
 func redactText(redact func(string) string, s string) (out string, err error) {
 	defer func() {
 		if r := recover(); r != nil {
-			err = fmt.Errorf("redaction function panicked: %v", r)
+			err = fmt.Errorf("redaction function panicked (%T)", r)
 		}
 	}()
 	return redact(s), nil

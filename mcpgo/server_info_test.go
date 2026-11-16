@@ -7,6 +7,7 @@ import (
 	"io"
 	"net/http"
 	"os"
+	"path/filepath"
 	"reflect"
 	"sort"
 	"strings"
@@ -423,6 +424,38 @@ func TestServerInfo_V4_FailedPromptListIsLeftOut(t *testing.T) {
 	}
 	if got := len(featureItems(t, body, agentcat.ServerInfoKeyTools)); got != 4 {
 		t.Errorf("tools = %d, want 4", got)
+	}
+}
+
+func TestServerInfo_ListErrorTextIsNotLogged(t *testing.T) {
+	agedHeartbeatMemory(t)
+	t.Setenv("HOME", t.TempDir())
+	agentcat.SetDebug(true)
+	t.Cleanup(func() { agentcat.SetDebug(false) })
+	project := projectID("x4")
+	hooks := &server.Hooks{}
+	hooks.AddOnRequestInitialization(func(_ context.Context, _ any, message any) error {
+		if raw, ok := message.(json.RawMessage); ok && strings.Contains(string(raw), `"prompts/list"`) {
+			return errors.New("secret")
+		}
+		return nil
+	})
+	c, _ := trackDemo(t, newDemoServer(server.WithHooks(hooks)), project, nil)
+
+	callTool(t, c, "alpha", nil)
+	body := onlyBody(t, project)
+	if _, ok := body.Features[agentcat.ServerInfoKeyPrompts]; ok {
+		t.Error("features has prompts, want the failed list left out")
+	}
+	log, err := os.ReadFile(filepath.Join(os.Getenv("HOME"), "agentcat.log"))
+	if err != nil {
+		t.Fatalf("agentcat.log: %v", err)
+	}
+	if !strings.Contains(string(log), "prompts list left out") {
+		t.Errorf("log has no line for the failed prompt list:\n%s", log)
+	}
+	if strings.Contains(string(log), "secret") {
+		t.Errorf("log holds customer text:\n%s", log)
 	}
 }
 
