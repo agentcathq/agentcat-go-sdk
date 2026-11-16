@@ -2,6 +2,7 @@ package mcpgo
 
 import (
 	"context"
+	"sync/atomic"
 	"testing"
 
 	"github.com/mark3labs/mcp-go/mcp"
@@ -123,10 +124,10 @@ func TestTrackInternal_DoesNotRegisterGetMoreToolsWhenDisabled(t *testing.T) {
 // their own hooks, Track appends AgentCat's list-injection hook to the same
 // struct rather than replacing it: both fire on one request.
 func TestTrackInternal_HooksMergeWithExisting(t *testing.T) {
-	userHookRan := false
+	var userHookRan atomic.Bool
 	hooks := &server.Hooks{}
 	hooks.AddBeforeAny(func(ctx context.Context, id any, method mcp.MCPMethod, message any) {
-		userHookRan = true
+		userHookRan.Store(true)
 	})
 
 	mcpServer := server.NewMCPServer(
@@ -155,7 +156,7 @@ func TestTrackInternal_HooksMergeWithExisting(t *testing.T) {
 		[]byte(`{"jsonrpc":"2.0","id":1,"method":"tools/list","params":{}}`),
 	)
 
-	if !userHookRan {
+	if !userHookRan.Load() {
 		t.Error("the user's BeforeAny hook must still run after Track")
 	}
 	if instance := getMCPcat(mcpServer); instance == nil || instance.Registries.Load() == nil {

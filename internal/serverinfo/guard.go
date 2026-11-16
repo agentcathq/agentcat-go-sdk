@@ -11,7 +11,6 @@ package serverinfo
 
 import (
 	"sync"
-	"sync/atomic"
 	"time"
 )
 
@@ -79,19 +78,6 @@ func SetClock(fn func() time.Time) (restore func()) {
 		clockMu.Unlock()
 	}
 }
-
-var disabled atomic.Bool
-
-// SetEnabled turns the heartbeat on or off for the whole process and returns
-// a function that restores the previous state. For tests: a suite whose
-// fixtures do not expect the heartbeat's list calls turns it off.
-func SetEnabled(enabled bool) (restore func()) {
-	prev := !disabled.Swap(!enabled)
-	return func() { disabled.Store(!prev) }
-}
-
-// Enabled reports whether the heartbeat is on.
-func Enabled() bool { return !disabled.Load() }
 
 // ResetMemory forgets the first-check time and every attempt, as a new
 // process would. For tests.

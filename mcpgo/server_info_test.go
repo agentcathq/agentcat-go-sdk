@@ -99,7 +99,6 @@ func newHeartbeatMemory(t *testing.T) *fakeClock {
 	t.Helper()
 	agentcat.WaitServerInfoForTest(10 * time.Second)
 	heartbeats.clear()
-	t.Cleanup(agentcat.SetServerInfoEnabledForTest(true))
 	clock := &fakeClock{t: time.Date(2026, 11, 16, 12, 0, 0, 0, time.UTC)}
 	t.Cleanup(agentcat.SetServerInfoClockForTest(clock.now))
 	agentcat.ResetServerInfoForTest()
@@ -520,11 +519,11 @@ func TestServerInfo_V10_FailuresNeverReachTheToolCall(t *testing.T) {
 		hooks  func(h *server.Hooks, release <-chan struct{})
 		redact func(string) string
 		// answer replaces the recorder's 202; posts is the POST count once the
-		// heartbeat has run, or -1 when the heartbeat is still held.
+		// heartbeat has ended, after release.
 		answer func(release <-chan struct{}) func(context.Context) (int, error)
 		posts  int
 	}{
-		{name: "api never answers", posts: -1, answer: func(release <-chan struct{}) func(context.Context) (int, error) {
+		{name: "api never answers", posts: 1, answer: func(release <-chan struct{}) func(context.Context) (int, error) {
 			return func(context.Context) (int, error) {
 				<-release
 				return 0, errors.New("no answer")
@@ -535,7 +534,7 @@ func TestServerInfo_V10_FailuresNeverReachTheToolCall(t *testing.T) {
 				panic("resource handler exploded")
 			})
 		}},
-		{name: "list handler never returns", posts: -1, hooks: func(h *server.Hooks, release <-chan struct{}) {
+		{name: "list handler never returns", posts: 1, hooks: func(h *server.Hooks, release <-chan struct{}) {
 			h.AddBeforeListPrompts(func(context.Context, any, *mcp.ListPromptsRequest) { <-release })
 		}},
 		{name: "redaction function fails", posts: 0, redact: func(string) string { panic("redaction exploded") }},
@@ -549,10 +548,12 @@ func TestServerInfo_V10_FailuresNeverReachTheToolCall(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			agedHeartbeatMemory(t)
 			release := make(chan struct{})
-			t.Cleanup(func() {
-				close(release)
+			var releaseOnce sync.Once
+			end := func() {
+				releaseOnce.Do(func() { close(release) })
 				waitHeartbeats(t)
-			})
+			}
+			t.Cleanup(end)
 			if tc.answer != nil {
 				heartbeats.answerWith(t, tc.answer(release))
 			}
@@ -570,6 +571,7 @@ func TestServerInfo_V10_FailuresNeverReachTheToolCall(t *testing.T) {
 			req.Params.Name = "alpha"
 			res, err := c.CallTool(context.Background(), req)
 			elapsed := time.Since(start)
+			end()
 			output := restore()
 
 			if err != nil || res.IsError || resultText(res) != "alpha done" {
@@ -581,9 +583,7 @@ func TestServerInfo_V10_FailuresNeverReachTheToolCall(t *testing.T) {
 			if output != "" {
 				t.Errorf("output on stdout or stderr: %q", output)
 			}
-			if tc.posts >= 0 {
-				expectPosts(t, project, tc.posts)
-			}
+			expectPosts(t, project, tc.posts)
 		})
 	}
 }
@@ -785,6 +785,165 @@ func TestServerInfo_V19_ToolCallWaitsForAMemoryOf60Seconds(t *testing.T) {
 // TestGetServerTitleAndInstructions_ReadsPrivateFields is the change-detection
 // tripwire for the reflective read of mcp-go's unexported implementation and
 // instructions fields.
+// hookSpy records the methods the server's hooks see and counts the calls of
+// the OnError hook.
+type hookSpy struct {
+	mu      sync.Mutex
+	methods []mcp.MCPMethod
+	errors  []error
+}
+
+func newHookSpy() (*hookSpy, *server.Hooks) {
+	spy := &hookSpy{}
+	hooks := &server.Hooks{}
+	hooks.AddBeforeAny(func(_ context.Context, _ any, method mcp.MCPMethod, _ any) {
+		spy.mu.Lock()
+		spy.methods = append(spy.methods, method)
+		spy.mu.Unlock()
+	})
+	hooks.AddOnError(func(_ context.Context, _ any, _ mcp.MCPMethod, _ any, err error) {
+		spy.mu.Lock()
+		spy.errors = append(spy.errors, err)
+		spy.mu.Unlock()
+	})
+	return spy, hooks
+}
+
+func (s *hookSpy) seen() ([]mcp.MCPMethod, []error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return append([]mcp.MCPMethod(nil), s.methods...), append([]error(nil), s.errors...)
+}
+
+func TestServerInfo_ToolsOnlyServerNeverCallsOnError(t *testing.T) {
+	agedHeartbeatMemory(t)
+	project := projectID("hooktools")
+	spy, hooks := newHookSpy()
+	s := server.NewMCPServer("tools-only-hooks", "1", server.WithHooks(hooks))
+	s.AddTool(mcp.NewTool("alpha"), textHandler("a"))
+	c, _ := trackDemo(t, s, project, nil)
+
+	callTool(t, c, "alpha", nil)
+	if got := featureKeys(onlyBody(t, project)); !reflect.DeepEqual(got, []string{"tools"}) {
+		t.Errorf("features keys = %v, want [tools]", got)
+	}
+	methods, errs := spy.seen()
+	if len(errs) != 0 {
+		t.Errorf("OnError hook called %d times: %v", len(errs), errs)
+	}
+	for _, m := range methods {
+		if m != mcp.MethodInitialize && m != mcp.MethodToolsCall && m != mcp.MethodToolsList {
+			t.Errorf("the hooks saw %s, want no list request for a capability the server does not offer", m)
+		}
+	}
+}
+
+func TestServerInfo_ServerWithEveryListNeverCallsOnError(t *testing.T) {
+	agedHeartbeatMemory(t)
+	project := projectID("hookall")
+	spy, hooks := newHookSpy()
+	c, _ := trackDemo(t, newDemoServer(server.WithHooks(hooks)), project, nil)
+
+	callTool(t, c, "alpha", nil)
+	body := onlyBody(t, project)
+	want := []string{"prompts", "resourceTemplates", "resources", "tools"}
+	if got := featureKeys(body); !reflect.DeepEqual(got, want) {
+		t.Errorf("features keys = %v, want %v", got, want)
+	}
+	for key, n := range map[string]int{"tools": 4, "resources": 2, "resourceTemplates": 1, "prompts": 2} {
+		if got := len(featureItems(t, body, key)); got != n {
+			t.Errorf("%s has %d items, want %d", key, got, n)
+		}
+	}
+	if _, errs := spy.seen(); len(errs) != 0 {
+		t.Errorf("OnError hook called %d times: %v", len(errs), errs)
+	}
+}
+
+func TestServerInfo_CapabilityReadIsSafeWhileTheServerAddsFeatures(t *testing.T) {
+	newHeartbeatMemory(t)
+	project := projectID("capsrace")
+	spy, hooks := newHookSpy()
+	s := server.NewMCPServer("growing-server", "1", server.WithHooks(hooks))
+	s.AddTool(mcp.NewTool("alpha"), textHandler("a"))
+	c, _ := trackDemo(t, s, project, nil)
+
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		read := func(context.Context, mcp.ReadResourceRequest) ([]mcp.ResourceContents, error) { return nil, nil }
+		prompt := func(context.Context, mcp.GetPromptRequest) (*mcp.GetPromptResult, error) {
+			return &mcp.GetPromptResult{}, nil
+		}
+		for i := 0; i < 20; i++ {
+			name := string(rune('a' + i))
+			s.AddResource(mcp.NewResource("file:///"+name, name), read)
+			s.AddPrompt(mcp.NewPrompt("prompt_"+name), prompt)
+		}
+	}()
+	for i := 0; i < 20; i++ {
+		agentcat.ResetServerInfoForTest()
+		listAllTools(t, c)
+		waitHeartbeats(t)
+	}
+	<-done
+	if _, errs := spy.seen(); len(errs) != 0 {
+		t.Errorf("OnError hook called %d times: %v", len(errs), errs)
+	}
+	if got := len(heartbeats.bodiesFor(project)); got != 20 {
+		t.Errorf("POSTs = %d, want 20", got)
+	}
+}
+
+// TestGetOfferedCapabilities_ReadsPrivateFields guards the private fields
+// that getOfferedCapabilities reads: capabilitiesMu and the tools, resources
+// and prompts pointers of capabilities. If mcp-go renames one, the reader
+// falls back to the tool capability only, and this test fails.
+func TestGetOfferedCapabilities_ReadsPrivateFields(t *testing.T) {
+	v := reflect.ValueOf(server.NewMCPServer("probe", "1")).Elem()
+	if f := v.FieldByName("capabilitiesMu"); !f.IsValid() || f.Type() != reflect.TypeOf(sync.RWMutex{}) {
+		t.Fatal("MCPServer.capabilitiesMu is gone or is no longer a sync.RWMutex")
+	}
+	caps := v.FieldByName("capabilities")
+	if !caps.IsValid() || caps.Kind() != reflect.Struct {
+		t.Fatal("MCPServer.capabilities is gone or is no longer a struct")
+	}
+	for _, name := range []string{"tools", "resources", "prompts"} {
+		if f := caps.FieldByName(name); !f.IsValid() || f.Kind() != reflect.Pointer {
+			t.Errorf("capabilities.%s is gone or is no longer a pointer", name)
+		}
+	}
+
+	read := func(context.Context, mcp.ReadResourceRequest) ([]mcp.ResourceContents, error) { return nil, nil }
+	prompt := func(context.Context, mcp.GetPromptRequest) (*mcp.GetPromptResult, error) {
+		return &mcp.GetPromptResult{}, nil
+	}
+	empty := server.NewMCPServer("empty", "1")
+	declared := server.NewMCPServer("declared", "1",
+		server.WithToolCapabilities(false), server.WithResourceCapabilities(false, false), server.WithPromptCapabilities(false))
+	added := server.NewMCPServer("added", "1")
+	added.AddTool(mcp.NewTool("alpha"), textHandler("a"))
+	added.AddResource(mcp.NewResource("file:///a", "a"), read)
+	added.AddPrompt(mcp.NewPrompt("p"), prompt)
+	toolsOnly := server.NewMCPServer("tools", "1")
+	toolsOnly.AddTool(mcp.NewTool("alpha"), textHandler("a"))
+
+	for _, tc := range []struct {
+		name string
+		s    *server.MCPServer
+		want offeredCapabilities
+	}{
+		{"no capability", empty, offeredCapabilities{}},
+		{"declared by option", declared, offeredCapabilities{tools: true, resources: true, prompts: true}},
+		{"added after start", added, offeredCapabilities{tools: true, resources: true, prompts: true}},
+		{"tools only", toolsOnly, offeredCapabilities{tools: true}},
+	} {
+		if got := getOfferedCapabilities(tc.s); got != tc.want {
+			t.Errorf("%s: getOfferedCapabilities = %+v, want %+v", tc.name, got, tc.want)
+		}
+	}
+}
+
 func TestGetServerTitleAndInstructions_ReadsPrivateFields(t *testing.T) {
 	s := server.NewMCPServer("probe", "1", server.WithTitle("Probe Title"), server.WithInstructions("probe instructions"))
 	title, instructions := getServerTitleAndInstructions(s)

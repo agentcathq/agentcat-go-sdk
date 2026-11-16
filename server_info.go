@@ -69,7 +69,7 @@ func MaybeStartServerInfo(ctx context.Context, trigger ServerInfoTrigger, instan
 			logging.New().Debugf("server info: recovered panic in the check: %v", r)
 		}
 	}()
-	if instance == nil || !serverinfo.Enabled() || serverinfo.IsHeartbeat(ctx) {
+	if instance == nil || serverinfo.IsHeartbeat(ctx) {
 		return
 	}
 	tracing := instance.Options != nil && !instance.Options.DisableTracing
@@ -88,34 +88,28 @@ func MaybeStartServerInfo(ctx context.Context, trigger ServerInfoTrigger, instan
 }
 
 // SetServerInfoSenderForTest replaces the heartbeat's sender and returns a
-// function that restores it. For tests: the test setup of each adapter
-// installs a recorder so that no test sends a heartbeat to the network.
+// function that restores it. It is for the SDK's own tests only: the test
+// setup of each adapter installs a recorder so that no test sends a heartbeat
+// to the network.
 func SetServerInfoSenderForTest(send func(ctx context.Context, body *ServerInfoRequest) (status int, err error)) (restore func()) {
 	return serverinfo.SetSender(send)
 }
 
-// SetServerInfoEnabledForTest turns the heartbeat on or off for the whole
-// process and returns a function that restores it. For tests: a suite whose
-// fixtures do not expect the heartbeat's list calls into their hooks and
-// handlers turns it off, and the heartbeat's own tests turn it back on.
-func SetServerInfoEnabledForTest(enabled bool) (restore func()) {
-	return serverinfo.SetEnabled(enabled)
-}
-
 // SetServerInfoClockForTest replaces the clock of the heartbeat check and
-// returns a function that restores it. For tests.
+// returns a function that restores it. It is for the SDK's own tests only.
 func SetServerInfoClockForTest(now func() time.Time) (restore func()) {
 	return serverinfo.SetClock(now)
 }
 
 // ResetServerInfoForTest empties the heartbeat's memory, as a new process
-// would start. For tests.
+// would start. It is for the SDK's own tests only.
 func ResetServerInfoForTest() {
 	serverinfo.ResetMemory()
 }
 
 // WaitServerInfoForTest waits until no heartbeat is running, or until
-// timeout, and reports whether every heartbeat finished. For tests.
+// timeout, and reports whether every heartbeat finished. It is for the SDK's
+// own tests only.
 func WaitServerInfoForTest(timeout time.Duration) bool {
 	return serverinfo.Wait(timeout)
 }

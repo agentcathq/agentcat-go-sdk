@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"reflect"
+	"sync"
 	"unsafe"
 
 	"github.com/mark3labs/mcp-go/mcp"
@@ -27,19 +28,74 @@ func maybeStartServerInfo(ctx context.Context, trigger agentcat.ServerInfoTrigge
 		})
 }
 
-// serverInfoSource describes the server c captures for the heartbeat. A list
-// whose capability the server did not register answers with an error, so it
-// has no key in the body.
+// serverInfoSource describes the server c captures for the heartbeat. It
+// sends a list request only for a capability the server offers, so the
+// server's hooks never see an error that the heartbeat caused.
 func serverInfoSource(c *capturer) *agentcat.ServerInfoSource {
 	title, instructions := getServerTitleAndInstructions(c.server)
-	return &agentcat.ServerInfoSource{
-		ServerVersion:     c.serverVersion,
-		ServerTitle:       title,
-		Instructions:      instructions,
-		Tools:             messageList(c.server, mcp.MethodToolsList, "tools"),
-		Resources:         messageList(c.server, mcp.MethodResourcesList, "resources"),
-		ResourceTemplates: messageList(c.server, mcp.MethodResourcesTemplatesList, "resourceTemplates"),
-		Prompts:           messageList(c.server, mcp.MethodPromptsList, "prompts"),
+	src := &agentcat.ServerInfoSource{
+		ServerVersion: c.serverVersion,
+		ServerTitle:   title,
+		Instructions:  instructions,
+	}
+	offered := getOfferedCapabilities(c.server)
+	if offered.tools {
+		src.Tools = messageList(c.server, mcp.MethodToolsList, "tools")
+	}
+	if offered.resources {
+		src.Resources = messageList(c.server, mcp.MethodResourcesList, "resources")
+		src.ResourceTemplates = messageList(c.server, mcp.MethodResourcesTemplatesList, "resourceTemplates")
+	}
+	if offered.prompts {
+		src.Prompts = messageList(c.server, mcp.MethodPromptsList, "prompts")
+	}
+	return src
+}
+
+// offeredCapabilities says which list capabilities a server offers.
+type offeredCapabilities struct {
+	tools, resources, prompts bool
+}
+
+// getOfferedCapabilities reads which of the tool, resource and prompt
+// capabilities the server offers. mcp-go keeps them as pointers in the
+// unexported capabilities field and sets them, also after start, while it
+// holds the unexported capabilitiesMu; this read holds the same lock. When
+// the layout is not the expected one, it reports the tool capability only:
+// the heartbeat runs only after the server handled a tool call or a
+// tools/list request, so that capability is certain.
+func getOfferedCapabilities(s *server.MCPServer) (offered offeredCapabilities) {
+	toolsOnly := offeredCapabilities{tools: true}
+	defer func() {
+		if r := recover(); r != nil {
+			offered = toolsOnly
+		}
+	}()
+	if s == nil {
+		return toolsOnly
+	}
+	v := reflect.ValueOf(s).Elem()
+	muField := v.FieldByName("capabilitiesMu")
+	capsField := v.FieldByName("capabilities")
+	if !muField.IsValid() || muField.Type() != reflect.TypeOf(sync.RWMutex{}) ||
+		!capsField.IsValid() || capsField.Kind() != reflect.Struct {
+		return toolsOnly
+	}
+	pointers := make([]reflect.Value, 3)
+	for i, name := range []string{"tools", "resources", "prompts"} {
+		f := capsField.FieldByName(name)
+		if !f.IsValid() || f.Kind() != reflect.Pointer {
+			return toolsOnly
+		}
+		pointers[i] = reflect.NewAt(f.Type(), unsafe.Pointer(f.UnsafeAddr())).Elem()
+	}
+	mu := (*sync.RWMutex)(unsafe.Pointer(muField.UnsafeAddr()))
+	mu.RLock()
+	defer mu.RUnlock()
+	return offeredCapabilities{
+		tools:     !pointers[0].IsNil(),
+		resources: !pointers[1].IsNil(),
+		prompts:   !pointers[2].IsNil(),
 	}
 }
 

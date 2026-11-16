@@ -97,7 +97,6 @@ func newHeartbeatMemory(t *testing.T) *fakeClock {
 	t.Helper()
 	agentcat.WaitServerInfoForTest(10 * time.Second)
 	heartbeats.clear()
-	t.Cleanup(agentcat.SetServerInfoEnabledForTest(true))
 	clock := &fakeClock{t: time.Date(2026, 11, 16, 12, 0, 0, 0, time.UTC)}
 	t.Cleanup(agentcat.SetServerInfoClockForTest(clock.now))
 	agentcat.ResetServerInfoForTest()
@@ -534,11 +533,11 @@ func TestServerInfo_V10_FailuresNeverReachTheToolCall(t *testing.T) {
 		name  string
 		setup func(s *mcp.Server, opts *Options, release <-chan struct{})
 		// answer replaces the recorder's 202; posts is the POST count once the
-		// heartbeat has run, or -1 when the heartbeat is still held.
+		// heartbeat has ended, after release.
 		answer func(release <-chan struct{}) func(context.Context) (int, error)
 		posts  int
 	}{
-		{name: "api never answers", posts: -1, answer: func(release <-chan struct{}) func(context.Context) (int, error) {
+		{name: "api never answers", posts: 1, answer: func(release <-chan struct{}) func(context.Context) (int, error) {
 			return func(context.Context) (int, error) {
 				<-release
 				return 0, errors.New("no answer")
@@ -547,7 +546,7 @@ func TestServerInfo_V10_FailuresNeverReachTheToolCall(t *testing.T) {
 		{name: "list handler fails", posts: 1, setup: func(s *mcp.Server, _ *Options, _ <-chan struct{}) {
 			s.AddReceivingMiddleware(panicOn("resources/list"))
 		}},
-		{name: "list handler never returns", posts: -1, setup: func(s *mcp.Server, _ *Options, release <-chan struct{}) {
+		{name: "list handler never returns", posts: 1, setup: func(s *mcp.Server, _ *Options, release <-chan struct{}) {
 			s.AddReceivingMiddleware(hangOn("prompts/list", release))
 		}},
 		{name: "redaction function fails", posts: 0, setup: func(_ *mcp.Server, opts *Options, _ <-chan struct{}) {
@@ -563,10 +562,12 @@ func TestServerInfo_V10_FailuresNeverReachTheToolCall(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			agedHeartbeatMemory(t)
 			release := make(chan struct{})
-			t.Cleanup(func() {
-				close(release)
+			var releaseOnce sync.Once
+			end := func() {
+				releaseOnce.Do(func() { close(release) })
 				waitHeartbeats(t)
-			})
+			}
+			t.Cleanup(end)
 			if tc.answer != nil {
 				heartbeats.answerWith(t, tc.answer(release))
 			}
@@ -582,6 +583,7 @@ func TestServerInfo_V10_FailuresNeverReachTheToolCall(t *testing.T) {
 			start := time.Now()
 			res, err := cs.CallTool(context.Background(), &mcp.CallToolParams{Name: "alpha"})
 			elapsed := time.Since(start)
+			end()
 			output := restore()
 
 			if err != nil || res.IsError || lastText(t, res) != "alpha done" {
@@ -593,9 +595,7 @@ func TestServerInfo_V10_FailuresNeverReachTheToolCall(t *testing.T) {
 			if output != "" {
 				t.Errorf("output on stdout or stderr: %q", output)
 			}
-			if tc.posts >= 0 {
-				expectPosts(t, project, tc.posts)
-			}
+			expectPosts(t, project, tc.posts)
 		})
 	}
 }
