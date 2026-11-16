@@ -20,6 +20,12 @@ import (
 // Beacon tests opt back in per-test with DISABLE_DIAGNOSTICS=false + a local server.
 func TestMain(m *testing.M) {
 	_ = os.Setenv("DISABLE_DIAGNOSTICS", "1")
+	// No test sends a server info heartbeat to the network: every heartbeat
+	// goes to the package's recorder. The heartbeat is off unless a test turns
+	// it on, so the list calls it makes never reach the hooks and handlers of
+	// fixtures written without it.
+	agentcat.SetServerInfoSenderForTest(heartbeats.send)
+	agentcat.SetServerInfoEnabledForTest(false)
 	os.Exit(m.Run())
 }
 
