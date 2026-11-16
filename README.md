@@ -73,9 +73,10 @@ Injected parameters are stripped from arguments before your tool handler runs, s
 AgentCat also records what an agent sees on your server. The SDK sends your server's name, version, title and instructions, and its full lists of tools, resources, resource templates and prompts. The tool list is the one a client gets from `tools/list`, with the parameters above and `get_more_tools`.
 
 - **When:** about once an hour for each process and server name. A handled `tools/list` request or tool call starts the check, so an idle server sends nothing. A runtime that keeps no memory between requests sends more often: once for each `tools/list` request and each `get_more_tools` call.
-- **How:** the SDK calls your server's own list handlers on a background goroutine. No request waits for it, and no error or panic in it reaches your server.
+- **How:** the SDK calls your server's own list handlers on a background goroutine. No request waits for it, and no error or panic in it reaches your server. It asks only for the lists your server offers.
+- **mark3labs/mcp-go hooks:** your server's hooks see the list requests of the heartbeat, about once an hour for each process, as they see the list requests of a client.
 - **Redaction:** your `RedactSensitiveInformation` function runs on every text value. Names and URIs of tools, resources and prompts are sent unchanged. If the function panics, the SDK sends nothing.
-- **Storage:** the SDK writes no file. Its only state is a small map of times in memory.
+- **Storage:** the heartbeat stores nothing on disk. Its only state is a small map of times in memory. With debug logging on, its log lines go to the SDK's usual log file.
 
 Nothing is sent when tracing is off or when there is no project ID.
 
