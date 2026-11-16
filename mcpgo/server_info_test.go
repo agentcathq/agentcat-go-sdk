@@ -167,13 +167,14 @@ func newDemoServer(opts ...server.ServerOption) *server.MCPServer {
 	}, opts...)
 	s := server.NewMCPServer("demo-server", "1.2.3", opts...)
 	s.AddTool(mcp.NewTool("alpha", mcp.WithDescription("First tool")), textHandler("alpha done"))
-	s.AddTool(mcp.NewTool("beta",
-		mcp.WithToolTitle("Beta Tool"),
+	beta := append([]mcp.ToolOption{
+		mcp.WithTitleAnnotation("Beta Tool"),
 		mcp.WithDescription(longDescription),
 		mcp.WithString("query", mcp.Description("What to look for")),
 		mcp.WithRawOutputSchema(json.RawMessage(`{"type":"object","properties":{"answer":{"type":"string"}}}`)),
 		mcp.WithReadOnlyHintAnnotation(true),
-	), textHandler("beta done"))
+	}, toolTitleOptions("Beta Tool")...)
+	s.AddTool(mcp.NewTool("beta", beta...), textHandler("beta done"))
 	s.AddTool(mcp.NewTool("gamma", mcp.WithDescription("Third tool")), textHandler("gamma done"))
 
 	read := func(context.Context, mcp.ReadResourceRequest) ([]mcp.ResourceContents, error) { return nil, nil }
