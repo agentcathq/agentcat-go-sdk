@@ -19,6 +19,12 @@ func TestMain(m *testing.M) {
 	// under go test, but we also keep them off for the suite by default so unrelated
 	// Track tests never emit real network traffic. Beacon tests opt back in per-test.
 	_ = os.Setenv("DISABLE_DIAGNOSTICS", "1")
+	// No test sends a server info heartbeat to the network: every heartbeat
+	// goes to the package's recorder. The heartbeat is off unless a test turns
+	// it on, so the list calls it makes never reach the hooks and handlers of
+	// fixtures written without it.
+	agentcat.SetServerInfoSenderForTest(heartbeats.send)
+	agentcat.SetServerInfoEnabledForTest(false)
 	os.Exit(m.Run())
 }
 
