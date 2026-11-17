@@ -107,6 +107,7 @@ go build ./...
 - [ ] Code is properly formatted (`go fmt ./...`)
 - [ ] New code includes appropriate tests
 - [ ] Documentation is updated if needed
+- [ ] A user-facing change has its entry under `[Unreleased]` in `CHANGELOG.md`
 - [ ] Commit messages are clear and descriptive
 
 ## Code Guidelines
@@ -132,39 +133,82 @@ go build ./...
 - Provide context in error messages
 - Use `fmt.Errorf` with `%w` for error wrapping when appropriate
 
-## Releasing
+## Release a version
 
-Three modules ship together and must carry the **same version**, because each
-adapter's `go.mod` requires the root module by that exact version. The
-`replace` directives make local builds ignore it, so a mismatch is invisible
-here and only breaks for someone installing from the proxy.
+The release workflow (`.github/workflows/release.yml`) does the release in two steps, with a pull
+request between them. The Java, Rust and Ruby SDKs release the same way.
 
-1. Set the version everywhere it appears, before tagging:
-   - `mcpgo/go.mod` and `officialsdk/go.mod` — `require go.agentcat.com/sdk/v2 <version>`
-   - the five `examples/*/*/go.mod` — the adapter require plus the indirect root require
-   - install commands in `README.md` and `MIGRATION.md`
-2. Merge to `main`, then tag that commit three times — the root tag first, so
-   the adapters have something to resolve against:
+Three modules ship together and must carry the **same version**: the root module
+`go.agentcat.com/sdk/v2` (tag `vX.Y.Z`), `go.agentcat.com/sdk/mcpgo/v2` (tag `mcpgo/vX.Y.Z`) and
+`go.agentcat.com/sdk/officialsdk/v2` (tag `officialsdk/vX.Y.Z`). Each adapter's `go.mod` requires
+the root module by that exact version. The `replace` directives make local builds ignore it, so a
+mismatch is invisible here and only breaks for someone who installs from the proxy. A Go module
+has no registry upload: a version is a set of git tags, and the Go module proxy reads them.
 
-   ```bash
-   git tag v2.1.0
-   git tag mcpgo/v2.1.0
-   git tag officialsdk/v2.1.0
-   git push origin v2.1.0 mcpgo/v2.1.0 officialsdk/v2.1.0
-   ```
+1. In GitHub, open **Actions > Release > Run workflow** on `main`. Keep `patch`, or type `minor`
+   or an exact version such as `2.2.0`. The words count from the newest `vX.Y.Z` tag of the root
+   module. `major` stops the workflow: a new major version needs new module paths (`/v3`), so it
+   stays a manual task.
+2. The workflow opens the pull request "Release vX.Y.Z". It sets the version in every place that
+   holds it: the root require of `mcpgo/go.mod` and `officialsdk/go.mod`, the adapter require and
+   the indirect root require of the five `examples/*/*/go.mod`, and any `@vX.Y.Z` install command
+   in `README.md` and `MIGRATION.md`. It turns `[Unreleased]` into the dated section of the
+   version. It also starts CI and the two compatibility workflows on the pull request: they hold
+   the required status checks of `main`. These stop the workflow: places that do not agree on one
+   version, an `[Unreleased]` section with no entry, a tag of the version that exists already, or
+   a version that the Go module proxy already has.
+3. Read the pull request, and merge it when the checks pass.
+4. The merge starts the workflow again. It waits for CI and the two compatibility workflows on
+   the merge commit. Then it tags that commit three times, the root tag first, so that the
+   adapters have something to resolve against. It waits until the Go module proxy serves both
+   adapters at the new version, from a directory outside this repository where the `replace`
+   directives do not apply. Then it creates the GitHub release `vX.Y.Z`, with the CHANGELOG section
+   as the notes.
 
-3. Verify from a directory outside this repo, where the `replace` directives do
-   not apply — this is the only check that proves the published requires resolve:
+If a step fails, fix the cause and re-run the failed jobs of that run. A tag that is already on the
+merge commit is a skip, so a re-run creates only the tags that are missing. A tag on another commit
+stops the workflow: the workflow never moves or deletes a tag. The GitHub release comes last, and a
+re-run skips a release that exists.
 
-   ```bash
-   cd "$(mktemp -d)" && go mod init check
-   go get go.agentcat.com/sdk/mcpgo/v2@v2.1.0
-   go get go.agentcat.com/sdk/officialsdk/v2@v2.1.0
-   ```
+Tags are immutable on the module proxy: a bad tag needs a new version, not a force-push. Do not
+push a `vX.Y.Z` tag of a version that you do not release: the proxy keeps it for good.
 
-Prerelease versions are never selected by `@latest`, so a beta does not become
-the default install; ask for it explicitly. Tags are immutable on the module
-proxy — a bad tag needs a new version, not a force-push.
+Each pull request with a user-facing change adds its entry under `[Unreleased]` in `CHANGELOG.md`.
+The release takes the entries from there.
+
+To run a step of the workflow by hand, run `go run ./scripts/release prepare <patch | minor | major |
+X.Y.Z> <YYYY-MM-DD>`, `status` or `notes <X.Y.Z>` from the root of the repository.
+`scripts/release/release_test.go` tests these steps in the normal `go test ./...` of the root module.
+
+The workflow supports only versions `X.Y.Z`. A pre-release (for example `v2.2.0-beta.1`) stays a
+manual task: set the version in every place above, merge, then tag the merge commit by hand, the
+root tag first, and check the result from outside the repository:
+
+```bash
+git tag vX.Y.Z-beta.1
+git tag mcpgo/vX.Y.Z-beta.1
+git tag officialsdk/vX.Y.Z-beta.1
+git push origin vX.Y.Z-beta.1 mcpgo/vX.Y.Z-beta.1 officialsdk/vX.Y.Z-beta.1
+
+cd "$(mktemp -d)" && go mod init check
+go get go.agentcat.com/sdk/mcpgo/v2@vX.Y.Z-beta.1
+go get go.agentcat.com/sdk/officialsdk/v2@vX.Y.Z-beta.1
+```
+
+`@latest` never selects a pre-release, so a beta does not become the default install; ask for it
+explicitly. A by-hand pre-release does not change the next version of the workflow: the words count
+only from `vX.Y.Z` tags. The release steps accept only `X.Y.Z` in the places that hold the
+version, so set them back to `X.Y.Z` (the version that you plan to release) before you run the
+workflow again.
+
+### One-time setup
+
+The release needs no publishing secret and no registry account: `GITHUB_TOKEN` creates the tags,
+and the Go module proxy fetches them from this public repository.
+
+- In the repository settings, turn on **Actions > General > Allow GitHub Actions to create and
+  approve pull requests**, so that the workflow can open the release pull request.
+- Create a `release` environment, limited to the `main` branch.
 
 ## Additional Resources
 
