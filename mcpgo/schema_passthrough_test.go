@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"strings"
+	"sync/atomic"
 	"testing"
 
 	"github.com/mark3labs/mcp-go/mcp"
@@ -174,11 +175,11 @@ func toolNames(tools []mcp.Tool) []string {
 // tool filter: a list that hides a tool must not stop that tool from
 // stripping when it is later unhidden and called.
 func TestRegistriesMergeAcrossFilteredLists(t *testing.T) {
-	var hideSecond bool
+	var hideSecond atomic.Bool
 	mcpServer := server.NewMCPServer("filtered-server", "1.0.0",
 		server.WithToolCapabilities(true),
 		server.WithToolFilter(func(ctx context.Context, tools []mcp.Tool) []mcp.Tool {
-			if !hideSecond {
+			if !hideSecond.Load() {
 				return tools
 			}
 			kept := tools[:0:0]
@@ -209,9 +210,9 @@ func TestRegistriesMergeAcrossFilteredLists(t *testing.T) {
 	h := newSpyHarnessOn(t, mcpServer, DefaultOptions(), "proj_test")
 
 	h.listTools() // both tools visible: both recorded
-	hideSecond = true
+	hideSecond.Store(true)
 	h.listTools() // b_second hidden: its entry must survive
-	hideSecond = false
+	hideSecond.Store(false)
 
 	result, _ := h.call("b_second", map[string]any{
 		"p": "keep", "session_id": sid("abc"), "context": "why",

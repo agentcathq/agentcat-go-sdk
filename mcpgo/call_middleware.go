@@ -240,6 +240,7 @@ func newToolMiddleware(c *capturer) server.ToolHandlerMiddleware {
 				}()
 			}
 
+			maybeStartServerInfo(ctx, agentcat.ServerInfoTriggerForTool(toolName), c)
 			return wireResult, err
 		}
 	}

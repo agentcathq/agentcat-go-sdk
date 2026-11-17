@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"strings"
+	"sync/atomic"
 	"testing"
 
 	"github.com/mark3labs/mcp-go/mcp"
@@ -84,10 +85,10 @@ func TestTrack_RegistersServer(t *testing.T) {
 // at construction survive Track: AgentCat composes with them via GetHooks()
 // instead of replacing them.
 func TestTrack_CustomHooksPreserved(t *testing.T) {
-	customHookCalled := false
+	var customHookCalled atomic.Bool
 	customHooks := &server.Hooks{}
 	customHooks.AddBeforeAny(func(ctx context.Context, id any, method mcp.MCPMethod, message any) {
-		customHookCalled = true
+		customHookCalled.Store(true)
 	})
 
 	mcpServer := server.NewMCPServer(
@@ -110,7 +111,7 @@ func TestTrack_CustomHooksPreserved(t *testing.T) {
 		[]byte(`{"jsonrpc":"2.0","id":1,"method":"tools/list","params":{}}`),
 	)
 
-	if !customHookCalled {
+	if !customHookCalled.Load() {
 		t.Error("customer BeforeAny hook did not run after Track")
 	}
 	if instance := getMCPcat(mcpServer); instance == nil || instance.Registries.Load() == nil {

@@ -121,9 +121,19 @@ func stashRebuild(instance *agentcat.AgentCatInstance, mcpServer *server.MCPServ
 			return nil, nil
 		}
 		raw := json.RawMessage(`{"jsonrpc":"2.0","id":"agentcat-rebuild","method":"tools/list","params":{}}`)
-		_ = live.HandleMessage(ctx, raw)
+		_ = live.HandleMessage(context.WithValue(ctx, registryRebuildKey{}, true), raw)
 		return nil, nil
 	}
+}
+
+// registryRebuildKey marks the context of the synthetic tools/list a rebuild
+// drives. That list serves a tool call, so it is not a list request a client
+// made, and it never runs the server info check of one.
+type registryRebuildKey struct{}
+
+func isRegistryRebuild(ctx context.Context) bool {
+	marked, _ := ctx.Value(registryRebuildKey{}).(bool)
+	return marked
 }
 
 // registerListInjection wires the AfterListTools hook that runs the pure
@@ -168,5 +178,8 @@ func registerListInjection(hooks *server.Hooks) {
 		// reachable from here, where the session is in context.
 		declareRegisteredSchemas(srv, cfg)
 		declareSessionSchemas(ctx, srv, cfg)
+		if !isRegistryRebuild(ctx) {
+			maybeStartServerInfo(ctx, agentcat.ServerInfoTriggerToolsList, capturerFor(srv))
+		}
 	})
 }

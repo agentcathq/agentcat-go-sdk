@@ -67,6 +67,7 @@ func newTrackingMiddleware(
 						handleToolsList(result, instance, agentcat.BuildInjectConfig(instance.Options, opts.ResolveSessionID != nil))
 					}
 				}()
+				maybeStartServerInfo(ctx, agentcat.ServerInfoTriggerToolsList, req, next, serverRef, serverImpl, opts.ResolveSessionID != nil)
 				return result, err
 			case "tools/call":
 				return handleToolCall(ctx, req, next, serverRef, projectID, opts, publishFn, serverImpl, agentcatVersion)
@@ -230,6 +231,7 @@ func handleToolCall(
 		}()
 	}
 
+	maybeStartServerInfo(ctx, agentcat.ServerInfoTriggerForTool(toolName), req, next, serverRef, serverImpl, opts.ResolveSessionID != nil)
 	return wireResult, err
 }
 
