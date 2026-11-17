@@ -9,6 +9,8 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and
 
 ## [Unreleased]
 
+## [2.2.0] - 2026-11-17
+
 ### Added
 
 - Each `mcp:tools/call` event now carries `input_tokens` and `output_tokens`: estimates of the
@@ -111,7 +113,8 @@ has the details.
 The [GitHub releases](https://github.com/agentcathq/agentcat-go-sdk/releases) have the notes of
 the versions before 1.0.0.
 
-[Unreleased]: https://github.com/agentcathq/agentcat-go-sdk/compare/v2.1.0...HEAD
+[Unreleased]: https://github.com/agentcathq/agentcat-go-sdk/compare/v2.2.0...HEAD
+[2.2.0]: https://github.com/agentcathq/agentcat-go-sdk/compare/v2.1.0...v2.2.0
 [2.1.0]: https://github.com/agentcathq/agentcat-go-sdk/compare/v2.0.0...v2.1.0
 [2.0.0]: https://github.com/agentcathq/agentcat-go-sdk/compare/v1.0.0...v2.0.0
 [1.0.0]: https://github.com/agentcathq/agentcat-go-sdk/releases/tag/v1.0.0
