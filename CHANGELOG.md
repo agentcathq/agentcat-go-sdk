@@ -17,13 +17,22 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and
   original size. To keep the sizes on your server, drop the two fields in `RedactEvent`. A failure
   to estimate never affects the tool result. The root module adds `ApplyTokenEstimates` for the
   adapters (#15).
+- The SDK now sends AgentCat a description of your MCP server, for both adapters: its name,
+  version, title and instructions, and the lists of its tools, resources, resource templates and
+  prompts. About once an hour per process and server name, after your server answers a request,
+  the SDK calls your server's own list handlers and sends the result in the background. In a
+  runtime that keeps no memory between requests, it sends only on a `tools/list` request or a
+  `get_more_tools` call. `RedactSensitiveInformation` runs on every text; item names and URIs
+  stay as they are. No option changes: the send is on when tracking is on, and a failed send
+  never reaches your server. The root module adds `MaybeStartServerInfo` and
+  `ServerInfoTriggerForTool` for the adapters (#18).
 
 ### Changed
 
 - A tool result with no content blocks now records `"content": []` in the event instead of
   leaving out the key (#15).
-- The SDK requires `go.agentcat.com/api` v1.0.4, which adds the two token fields to the publish
-  request (#15).
+- The SDK requires `go.agentcat.com/api` v1.0.5, which adds the two token fields to the publish
+  request (#15) and the server info request (#18).
 
 ## [2.1.0] - 2026-08-29
 
