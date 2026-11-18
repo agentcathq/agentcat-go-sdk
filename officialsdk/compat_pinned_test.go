@@ -3,6 +3,7 @@
 package officialsdk
 
 import (
+	"encoding/json"
 	"testing"
 
 	"github.com/modelcontextprotocol/go-sdk/mcp"
@@ -44,5 +45,32 @@ func TestCompatShimsResolveAgainstPinnedVersion(t *testing.T) {
 	if inputResponsesField() == nil {
 		t.Error("CallToolParamsRaw.InputResponses not found on the pinned go-sdk: the " +
 			"field was renamed, and MRTR continuations are no longer tagged")
+	}
+}
+
+func TestResultNeedsInputBeforeWireAnnotation(t *testing.T) {
+	annotated := &mcp.CallToolResult{}
+	if err := json.Unmarshal([]byte(`{"resultType":"input_required"}`), annotated); err != nil {
+		t.Fatal(err)
+	}
+	for _, tt := range []struct {
+		name string
+		res  *mcp.CallToolResult
+		want bool
+	}{
+		{name: "nil"},
+		{name: "empty", res: &mcp.CallToolResult{}},
+		{name: "complete", res: &mcp.CallToolResult{Content: []mcp.Content{&mcp.TextContent{Text: "done"}}}},
+		{name: "error", res: &mcp.CallToolResult{IsError: true}},
+		{name: "input requests", res: &mcp.CallToolResult{InputRequests: mcp.InputRequestMap{"roots": &mcp.ListRootsParams{}}}, want: true},
+		{name: "empty input requests", res: &mcp.CallToolResult{InputRequests: mcp.InputRequestMap{}}, want: true},
+		{name: "request state only", res: &mcp.CallToolResult{RequestState: "next"}, want: true},
+		{name: "wire annotation only", res: annotated, want: true},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := resultNeedsInput(tt.res); got != tt.want {
+				t.Errorf("resultNeedsInput() = %v, want %v", got, tt.want)
+			}
+		})
 	}
 }
