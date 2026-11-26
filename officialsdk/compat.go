@@ -12,11 +12,8 @@ import (
 // newer than the declared floor (v1.4.1). Everything else compiles against the
 // floor unconditionally.
 //
-// Four APIs arrived together in go-sdk v1.7.0, all part of MCP 2026-07-28:
-// ServerRequest.ProtocolVersion, ServerRequest.ClientInfo,
-// CallToolParamsRaw.InputResponses and CallToolResult.NeedsInput. Three are
-// methods, so an interface assertion detects them for free and without
-// reflection; only InputResponses is a struct field.
+// The MCP 2026-07-28 APIs arrived in go-sdk v1.7.0. Methods are detected by
+// interface assertion; optional struct fields use cached-index reflection.
 //
 // The two degradations are of different kinds, and the difference matters:
 //
@@ -122,11 +119,36 @@ func resultNeedsInput(res *mcp.CallToolResult) bool {
 	if res == nil {
 		return false
 	}
-	if n, ok := any(res).(interface{ NeedsInput() bool }); ok {
-		return n.NeedsInput()
+	if n, ok := any(res).(interface{ NeedsInput() bool }); ok && n.NeedsInput() {
+		return true
+	}
+	// Newer go-sdk versions annotate resultType after receiving middleware
+	// returns, so NeedsInput alone cannot identify a handler's raw result.
+	v := reflect.ValueOf(res).Elem()
+	if idx := inputRequestsField(); idx != nil && !v.FieldByIndex(idx).IsNil() {
+		return true
+	}
+	if idx := requestStateField(); idx != nil && v.FieldByIndex(idx).String() != "" {
+		return true
 	}
 	return false
 }
+
+var inputRequestsField = sync.OnceValue(func() []int {
+	f, ok := reflect.TypeOf(mcp.CallToolResult{}).FieldByName("InputRequests")
+	if !ok || f.Type.Kind() != reflect.Map {
+		return nil
+	}
+	return f.Index
+})
+
+var requestStateField = sync.OnceValue(func() []int {
+	f, ok := reflect.TypeOf(mcp.CallToolResult{}).FieldByName("RequestState")
+	if !ok || f.Type.Kind() != reflect.String {
+		return nil
+	}
+	return f.Index
+})
 
 // inputResponsesField locates CallToolParamsRaw.InputResponses once. Invalid
 // when the field does not exist (< v1.7.0).
