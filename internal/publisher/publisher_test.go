@@ -2,6 +2,7 @@ package publisher
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"net/http"
 	"net/http/httptest"
@@ -834,5 +835,64 @@ func TestPublishEvent_PipelineOrderRedactSanitizeTruncate(t *testing.T) {
 	if len(*sent.UserIntent) != 2048+len("...") {
 		t.Errorf("user intent length = %d, want %d (redacted then truncated)",
 			len(*sent.UserIntent), 2048+len("..."))
+	}
+}
+
+func TestPublishEvent_MasksSensitiveKeys(t *testing.T) {
+	// Both adapters put the request headers at parameters.extra.header as a typed
+	// http.Header. The sender must get the masked JSON, and the handler's header must
+	// keep its values.
+	p := New(nil, nil, "", nil)
+	var sent []byte
+	p.sendFn = func(event *core.Event, workerID int) bool {
+		sent, _ = json.Marshal(event.PublishEventRequest)
+		return true
+	}
+
+	header := http.Header{}
+	header.Set("Authorization", "Bearer abc.def")
+	header.Set("Cookie", "sid=1")
+	header.Set("X-Api-Key", "k-123")
+	header.Set("User-Agent", "claude-code/2.1.0")
+	header.Set("X-Anthropic-Client", "claude-code")
+	header.Set("Mcp-Session-Id", "0b1c")
+	event := makeEvent("mcp:tools/call")
+	event.Parameters = map[string]any{
+		"extra": map[string]any{"header": header, "tokenInfo": map[string]any{"userID": "u-1"}},
+	}
+
+	if !p.Publish(event) {
+		t.Fatal("event was not accepted")
+	}
+	if err := p.Shutdown(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+
+	var got struct {
+		Parameters struct {
+			Extra map[string]any `json:"extra"`
+		} `json:"parameters"`
+	}
+	if err := json.Unmarshal(sent, &got); err != nil {
+		t.Fatalf("sender got %s: %v", sent, err)
+	}
+	gotHeader, _ := got.Parameters.Extra["header"].(map[string]any)
+	for _, key := range []string{"Authorization", "Cookie", "X-Api-Key"} {
+		if gotHeader[key] != "[redacted]" {
+			t.Errorf("%s = %#v, want [redacted]", key, gotHeader[key])
+		}
+	}
+	for key, want := range map[string]string{
+		"User-Agent": "claude-code/2.1.0", "X-Anthropic-Client": "claude-code", "Mcp-Session-Id": "0b1c",
+	} {
+		if values, _ := gotHeader[key].([]any); len(values) != 1 || values[0] != want {
+			t.Errorf("%s = %#v, want [%q]", key, gotHeader[key], want)
+		}
+	}
+	if got.Parameters.Extra["tokenInfo"] != "[redacted]" {
+		t.Errorf("tokenInfo = %#v, want [redacted]", got.Parameters.Extra["tokenInfo"])
+	}
+	if header.Get("Authorization") != "Bearer abc.def" || header.Get("Cookie") != "sid=1" {
+		t.Errorf("the handler's header changed: %v", header)
 	}
 }

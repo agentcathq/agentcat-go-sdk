@@ -163,6 +163,8 @@ shutdown, err := agentcat.Track(mcpServer, "proj_0000000", &agentcat.Options{
 
 AgentCat redacts all data sent to its servers and encrypts at rest, but for additional security, it offers a hook to do your own redaction on all text data returned back to our servers.
 
+The SDK also masks sensitive keys on its own. In `parameters`, `response` and `error`, the value of a key such as `Authorization`, `Cookie`, `X-Api-Key` or `pageToken` becomes `[redacted]` before the event leaves your server.
+
 ```go
 shutdown, err := agentcat.Track(mcpServer, "proj_0000000", &agentcat.Options{
     RedactSensitiveInformation: func(text string) string {
