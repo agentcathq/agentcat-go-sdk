@@ -56,7 +56,8 @@ func unmarshalArguments(raw json.RawMessage) map[string]any {
 }
 
 // extractExtra extracts transport-layer metadata from the request.
-// For HTTP transports, this includes headers and OAuth token info.
+// For HTTP transports, this includes headers and OAuth token info. The publisher masks
+// their sensitive values (Authorization, Cookie, tokenInfo) before the event leaves the server.
 // Returns nil if no extra data is available (e.g., stdio transport or ClientRequest).
 func extractExtra(req mcp.Request) map[string]any {
 	if req == nil {

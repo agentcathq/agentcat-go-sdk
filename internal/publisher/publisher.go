@@ -12,6 +12,7 @@ import (
 	"go.agentcat.com/sdk/v2/internal/logging"
 	"go.agentcat.com/sdk/v2/internal/redaction"
 	"go.agentcat.com/sdk/v2/internal/sanitization"
+	"go.agentcat.com/sdk/v2/internal/sensitivekeys"
 	"go.agentcat.com/sdk/v2/internal/truncation"
 )
 
@@ -158,7 +159,7 @@ func (p *Publisher) SetTelemetryManager(m *exporters.Manager) {
 	p.telemetry.Store(m)
 }
 
-// publishEvent runs the event pipeline (redact -> sanitize -> truncate), fans
+// publishEvent runs the event pipeline (redact -> sanitize -> mask -> truncate), fans
 // the event out to any configured telemetry exporters, and sends the event to
 // the AgentCat API, retrying failed sends with exponential backoff (1s, 2s,
 // 4s). Retries are interrupted by shutdown. Events without a project ID
@@ -190,6 +191,9 @@ func (p *Publisher) publishEvent(event *core.Event, workerID int) {
 	// Sanitize and truncate fail open: a panic in either stage is logged and
 	// the event is published with the stages that succeeded so far.
 	p.runStage("sanitization", event, workerID, func() { sanitization.SanitizeEvent(event) })
+	// The mask runs before truncation and before any consumer reads the event, so the
+	// AgentCat API and every exporter get the masked event. It never fails open.
+	p.maskSensitiveKeys(event, workerID)
 	p.runStage("truncation", event, workerID, func() { truncation.TruncateEvent(event) })
 
 	// Fan out to telemetry exporters (fire-and-forget, in parallel with and
@@ -231,6 +235,30 @@ func (p *Publisher) publishEvent(event *core.Event, workerID int) {
 
 	p.logger.Errorf("Worker %d giving up on event %s after %d attempts",
 		workerID, event.GetId(), p.maxRetries+1)
+}
+
+// maskSensitiveKeys replaces the values of sensitive keys (credential headers, tokens,
+// secrets) in the parameters, response and error of the event. If the mask panics on a
+// field, the event goes out without that field: the field is a map, so it cannot hold the
+// mask string, and an unmasked field must never leave the server.
+func (p *Publisher) maskSensitiveKeys(event *core.Event, workerID int) {
+	mask := func(name string, field map[string]any) (masked map[string]any) {
+		defer func() {
+			if r := recover(); r != nil {
+				p.logger.Warnf("Worker %d sensitive key mask panicked on %s for event %s: %v - removing the field",
+					workerID, name, event.GetId(), r)
+				masked = nil
+			}
+		}()
+		if field == nil {
+			return nil
+		}
+		masked, _ = sensitivekeys.MaskSensitiveKeys(field).(map[string]any)
+		return masked
+	}
+	event.Parameters = mask("parameters", event.Parameters)
+	event.Response = mask("response", event.Response)
+	event.Error = mask("error", event.Error)
 }
 
 // runStage runs a pipeline stage with panic recovery so a bug in event

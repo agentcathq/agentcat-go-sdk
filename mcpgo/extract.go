@@ -37,7 +37,8 @@ func extractResponse(result *mcp.CallToolResult) map[string]any {
 // extractExtra extracts transport-layer metadata from the request message.
 // For HTTP transports, mcp-go request types have a Header field populated
 // with the incoming HTTP headers. Uses reflection to access the Header field
-// from any request type without maintaining a type switch.
+// from any request type without maintaining a type switch. The publisher masks the
+// sensitive header values (Authorization, Cookie) before the event leaves the server.
 // Returns nil if no extra data is available (e.g., stdio transport).
 func extractExtra(message any) map[string]any {
 	if message == nil {
